@@ -9,7 +9,7 @@ into an app that runs on the tablet itself. Upstream is
 
 ## 1. Decisions
 
-These are settled. Sections 3 to 5 are recommendations that still need a yes.
+These are settled. Sections 4 to 7 follow from them and are open to change.
 
 | # | Decision |
 |---|----------|
@@ -17,7 +17,7 @@ These are settled. Sections 3 to 5 are recommendations that still need a yes.
 | D2 | Code is written so rM1, rM2, Paper Pro and Paper Pure can be added later. They are not tested and not promised to work. |
 | D3 | Milestone 1 is an app that launches on the tablet and can list and install Vellum packages. |
 | D4 | The Go backend is reused. A new `CommandExecutor` (`internal/executor/executor.go`) runs commands locally instead of over SSH. |
-| D5 | The Wails UI is not used on the tablet, because it needs GTK and WebKitGTK. An e-ink UI and a launch method are chosen from the options in section 3. |
+| D5 | The Wails UI is not used on the tablet, because it needs GTK and WebKitGTK. The UI is option A in section 3: a QML frontend loaded by AppLoad, with the Go backend as its backend process. |
 | D6 | There is a written plan for recovering when the app breaks the stock UI or itself (section 5). |
 | D7 | Desktop-only features are dropped or reworked: saved SSH logins for several devices, file transfer between computer and tablet, and probably the built-in terminal (section 6). |
 
@@ -89,7 +89,7 @@ installs into `/home/root/xovi/exthome/appload/retaskable/`.
 
 ## 3. UI and launcher options
 
-### Option A: AppLoad QML frontend with a Go backend (recommended)
+### Option A: AppLoad QML frontend with a Go backend (chosen)
 
 The UI is QML inside the stock UI. The reused Go backend runs as the AppLoad
 backend process and talks to the UI in JSON over the AppLoad socket.
@@ -133,10 +133,10 @@ would show the UI.
 Oxide is a second launcher that Vellum packages for `aarch64`. I did not
 check whether it works on the Move.
 
-### Recommendation
+### Choice
 
-Option A, launched from AppLoad, with tripletap to start xovi without a
-computer.
+Option A, launched from AppLoad. tripletap is the suggested way to start xovi
+without a computer.
 
 ## 4. Consequences of option A
 
@@ -171,7 +171,7 @@ Ordered from least to most drastic. The first three need no computer.
 | A mod, AppLoad or the app's QML breaks the stock UI | Reboot. xovi is tethered, so the tablet comes up stock. |
 | The stock UI is fine but xovi will not start cleanly | Over SSH: `vellum del` the offending package, or remove `/home/root/xovi/exthome/appload/remanager/`. Desktop reManager can do the same. |
 | The tablet boots but the UI never appears | SSH over USB still works if nothing below was broken. Fix from there. |
-| Nothing responds | reMarkable's official software recovery over USB. I have not confirmed what it does to documents or developer mode on the Move. |
+| Nothing responds | reMarkable's official software recovery over USB. Recovery mode is entered from the boot ROM with the power button (hold 25 to 30 seconds, release, press once), so it does not depend on any software on the tablet. It needs reMarkable's desktop app or recovery command-line tool on a computer. It is also how developer mode is left. I have not confirmed what it does to documents. |
 
 Rules the app follows so those steps keep working:
 
@@ -226,8 +226,10 @@ ondevice/manifest.json          AppLoad manifest
 ```
 
 - `LocalExecutor` runs each command through `/bin/sh -c` with the same `PATH`
-  prefix as `executor.WithDevicePath`, and streams output line by line. Some
-  hooks set `RequiresPTY`; whether a local PTY is needed is open.
+  prefix as `executor.WithDevicePath`, and streams output line by line. It
+  drops `LD_PRELOAD`, which a backend started from `xochitl` would otherwise
+  pass on. It refuses commands marked `RequiresPTY`; nothing in the code sets
+  that flag today. Written, with tests.
 - Other models (D2): everything model-specific goes behind one device profile
   (model name, Vellum virtual package, screen size, architecture). Only the
   Move's profile is filled in. The backend builds for `arm64` only until
@@ -243,7 +245,7 @@ ondevice/manifest.json          AppLoad manifest
 
 Milestone 1, in order:
 
-1. `LocalExecutor` with tests.
+1. `LocalExecutor` with tests. Done.
 2. Go AppLoad client with tests against a local socket.
 3. Backend: list catalogue, list installed, simulate, install.
 4. QML: package list, package detail, confirm, progress.
@@ -251,12 +253,11 @@ Milestone 1, in order:
 
 Open questions:
 
-- Which OS version is on the Move, and are Vellum, xovi and AppLoad already
-  installed? AppLoad needs 3.28 or 3.29 today.
+- Which OS version is on the Move? Vellum, xovi and AppLoad are already
+  installed on it. The current AppLoad package needs 3.28 or 3.29.
 - How does AppLoad parent its backend process (consequence 3)?
 - How much of `packagesservice.go` has to move into `internal/`?
-- Does any install hook need a PTY when run locally?
-- What does official software recovery do on the Move?
+- What does official software recovery do to documents on the Move?
 
 ## 9. Sources
 
@@ -272,9 +273,9 @@ Open questions:
 - Wails v3 server build: <https://v3.wails.io/guides/server-build>
 - Move specifications:
   <https://remarkable.com/products/remarkable-paper/pro-move/details/features>
+- Recovery mode: <https://developer.remarkable.com/documentation/recovery-mode>
 - Official recovery: <https://support.remarkable.com/s/article/Software-recovery>
-  and <https://developer.remarkable.com/documentation/recovery-mode> (search
-  summaries only)
-
-Not reachable from the session that wrote this, so not read: remarkable.guide
-(developer mode page) and the KOReader install wiki.
+  (search summary only)
+- Developer mode: <https://remarkable.guide/tech/developer-mode.html>
+- KOReader install wiki, which describes the same xovi and AppLoad route for
+  the Move: <https://github.com/koreader/koreader/wiki/Installation-on-ReMarkable>
