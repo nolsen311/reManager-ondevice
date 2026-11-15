@@ -1,7 +1,10 @@
 # reManager on-device: design
 
-Status: draft. The backend's read-only commands have been run on the Move
-(section 8); installs and the UI have not.
+Status: milestone 1 reached on 2026-11-15. On a Paper Pro Move with OS
+3.27.3.0 and AppLoad 0.5.3-r3, the app launches from AppLoad, lists the
+catalogue and installed a package (`retaskable`) through the systemd worker.
+One tablet, one install; the failure paths in section 5 have not been
+rehearsed.
 
 This fork turns reManager from a desktop app that drives a reMarkable over SSH
 into an app that runs on the tablet itself. Upstream is
@@ -170,8 +173,9 @@ These follow from the choice and shape the design.
    stock UI is expected to take the backend with it. An install therefore
    runs in its own systemd unit (`systemd-run`), writes a log and a result
    file under `/home/root`, and the UI reads that state when it comes back.
-   `systemd-run` is present on the Move at `/usr/bin/systemd-run`; starting
-   a worker with it has not been tried there yet.
+   `systemd-run` is present on the Move and the worker has completed one
+   install there. An install that restarts the stock UI partway has not been
+   tried.
 4. **Two UIs, one backend.** The Go packages stay shared with upstream so
    upstream fixes can be merged. On-device code goes in new directories and
    the Wails app keeps building.
@@ -305,10 +309,12 @@ Milestone 1, in order:
    detection, `installed` and `plan` of an already-installed package work.
    Not yet run there: a plan that would install something, `install`, and
    the systemd worker.
-4. QML: package list, package detail, confirm, progress. Written and
-   rendered on a PC against a mock backend (`ondevice/test/render.sh`). Not
-   yet loaded by AppLoad on the Move.
-5. First run on the Move, after the rehearsal in section 5.
+4. QML: package list, package detail, confirm, progress. Done; rendered on
+   a PC against a mock backend (`ondevice/test/render.sh`) and used on the
+   Move.
+5. First run on the Move. Done: browsing, a plan, and an install of
+   `retaskable` worked, and packages for other OS versions show as
+   incompatible. The rehearsal in section 5 was not done first.
 
 Open questions:
 
