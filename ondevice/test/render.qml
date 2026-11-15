@@ -49,6 +49,9 @@ Window {
     readonly property var steps: [
         function (next) { wait(next) },
         function (next) { shoot("01-list", next) },
+        function (next) { loader.item.showIncompatible = true; loader.item.loadList(0); next() },
+        function (next) { shoot("01b-list-all-os", next) },
+        function (next) { loader.item.showIncompatible = false; next() },
         function (next) { loader.item.showTab("installed"); next() },
         function (next) { shoot("02-installed", next) },
         function (next) { loader.item.openDetail("chessmarkable"); next() },

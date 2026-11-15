@@ -306,8 +306,11 @@ ondevice/manifest.json          AppLoad manifest
 ### Frontend as built
 
 - `ondevice/ui/Main.qml` has four screens: list (all, installed or updates,
-  nine per page, with Previous and Next instead of scrolling), detail, plan
-  and progress. Plan and progress serve install, remove and update alike. It is black on white with no animation, and every size is a
+  eight per page, with Previous and Next instead of scrolling), detail, plan
+  and progress. Plan and progress serve install, remove and update alike. Mods that
+  cannot be installed on this tablet and OS are hidden from "All mods"
+  unless shown with a toggle; installed ones are always listed. The filter
+  is applied by the backend, so page counts stay right. It is black on white with no animation, and every size is a
   fraction of the width so it fits a window as well as the full screen.
 - It uses only `QtQuick` and AppLoad's endpoint, not Qt Quick Controls.
 - AppLoad drops messages sent while the backend is not connected. The

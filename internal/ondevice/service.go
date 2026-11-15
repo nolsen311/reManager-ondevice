@@ -75,14 +75,18 @@ type PackageDetail struct {
 type ListRequest struct {
 	Query         string `json:"query"`
 	InstalledOnly bool   `json:"installedOnly"`
-	Offset        int    `json:"offset"`
-	Limit         int    `json:"limit"`
+	// IncludeIncompatible also lists mods that cannot be installed on this tablet and OS. Installed ones are always listed.
+	IncludeIncompatible bool `json:"includeIncompatible"`
+	Offset              int  `json:"offset"`
+	Limit               int  `json:"limit"`
 }
 
 type ListResult struct {
 	Packages []PackageSummary `json:"packages"`
 	Total    int              `json:"total"`
 	Offset   int              `json:"offset"`
+	// Incompatible counts the matching mods left out because they cannot be installed here.
+	Incompatible int `json:"incompatible"`
 }
 
 // The jobs the service can plan and run.
@@ -194,6 +198,7 @@ func (s *Service) List(req ListRequest) (*ListResult, error) {
 
 	query := strings.ToLower(strings.TrimSpace(req.Query))
 	matches := []PackageSummary{}
+	incompatible := 0
 	for _, pkg := range packages {
 		if hidden(pkg.Name) {
 			continue
@@ -204,7 +209,12 @@ func (s *Service) List(req ListRequest) (*ListResult, error) {
 		if query != "" && !strings.Contains(strings.ToLower(pkg.Name), query) && !strings.Contains(strings.ToLower(pkg.Description), query) {
 			continue
 		}
-		matches = append(matches, summarize(pkg, installed))
+		summary := summarize(pkg, installed)
+		if !summary.Compatible && !summary.Installed && !req.IncludeIncompatible {
+			incompatible++
+			continue
+		}
+		matches = append(matches, summary)
 	}
 	sort.Slice(matches, func(i, j int) bool { return matches[i].Name < matches[j].Name })
 
@@ -214,7 +224,7 @@ func (s *Service) List(req ListRequest) (*ListResult, error) {
 	}
 	offset := min(max(req.Offset, 0), len(matches))
 	end := min(offset+limit, len(matches))
-	return &ListResult{Packages: matches[offset:end], Total: len(matches), Offset: offset}, nil
+	return &ListResult{Packages: matches[offset:end], Total: len(matches), Offset: offset, Incompatible: incompatible}, nil
 }
 
 func (s *Service) Detail(name string) (*PackageDetail, error) {

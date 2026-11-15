@@ -16,7 +16,7 @@ Rectangle {
 
     // Sizes are in units of 1/954 of the width, the Paper Pro Move's portrait width, so a window or another screen scales the layout.
     readonly property real unit: width / 954
-    readonly property int pageSize: 9
+    readonly property int pageSize: 8
 
     // Message types shared with internal/ondevice/handler.go.
     readonly property int msgRequest: 1
@@ -32,6 +32,8 @@ Rectangle {
     property string tab: "all"   // all, installed, updates
     property int offset: 0
     property int total: 0
+    property bool showIncompatible: false
+    property int hiddenIncompatible: 0
     property var packages: []
     property var upgrades: []
     property var detail: null
@@ -136,10 +138,11 @@ Rectangle {
             })
             return
         }
-        request("list", { installedOnly: tab === "installed", offset: newOffset, limit: pageSize }, function (result) {
+        request("list", { installedOnly: tab === "installed", includeIncompatible: showIncompatible, offset: newOffset, limit: pageSize }, function (result) {
             packages = result.packages
             total = result.total
             offset = result.offset
+            hiddenIncompatible = result.incompatible
             screen = "list"
         })
     }
@@ -362,9 +365,43 @@ Rectangle {
                 color: "#444444"
             }
 
+            Item {
+                id: osFilter
+                anchors { top: tabs.bottom; left: parent.left; right: parent.right }
+                readonly property bool shown: root.tab === "all" && (root.showIncompatible || root.hiddenIncompatible > 0)
+                visible: shown
+                height: shown ? 92 * unit : 0
+
+                Text {
+                    anchors { left: parent.left; leftMargin: 40 * unit; verticalCenter: parent.verticalCenter }
+                    text: root.showIncompatible ? "Showing mods for other OS versions"
+                        : root.hiddenIncompatible + (root.hiddenIncompatible === 1 ? " mod is" : " mods are") + " hidden: not for this OS"
+                    font.pixelSize: 28 * unit
+                    color: "#444444"
+                }
+                Rectangle {
+                    anchors { right: parent.right; rightMargin: 40 * unit; verticalCenter: parent.verticalCenter }
+                    width: toggleLabel.implicitWidth + 40 * unit
+                    height: 64 * unit
+                    border.color: "black"
+                    border.width: Math.max(2, 2 * unit)
+                    Text {
+                        id: toggleLabel
+                        anchors.centerIn: parent
+                        text: root.showIncompatible ? "Hide them" : "Show"
+                        font.pixelSize: 28 * unit
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: !root.busy
+                        onClicked: { root.showIncompatible = !root.showIncompatible; root.loadList(0) }
+                    }
+                }
+            }
+
             Column {
                 id: rows
-                anchors { top: tabs.bottom; topMargin: 24 * unit; left: parent.left; right: parent.right }
+                anchors { top: osFilter.bottom; topMargin: 24 * unit; left: parent.left; right: parent.right }
 
                 Repeater {
                     model: root.packages

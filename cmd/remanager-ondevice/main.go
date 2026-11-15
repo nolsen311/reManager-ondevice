@@ -83,7 +83,7 @@ func run(args []string, allowUntested bool) error {
 
 	switch args[0] {
 	case "list", "installed":
-		req := ondevice.ListRequest{InstalledOnly: args[0] == "installed", Query: strings.Join(args[1:], " ")}
+		req := ondevice.ListRequest{InstalledOnly: args[0] == "installed", Query: strings.Join(args[1:], " "), IncludeIncompatible: true}
 		for {
 			page, err := service.List(req)
 			if err != nil {

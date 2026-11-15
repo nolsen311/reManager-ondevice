@@ -52,8 +52,9 @@ Item {
                 : { running: false, events: [] })
             break
         case "list":
-            var all = catalogue.filter(function (pkg) { return !p.installedOnly || pkg.installed })
-            reply(req.id, { packages: all.slice(p.offset, p.offset + p.limit), total: all.length, offset: p.offset })
+            var matching = catalogue.filter(function (pkg) { return !p.installedOnly || pkg.installed })
+            var all = matching.filter(function (pkg) { return p.includeIncompatible || pkg.compatible || pkg.installed })
+            reply(req.id, { packages: all.slice(p.offset, p.offset + p.limit), total: all.length, offset: p.offset, incompatible: matching.length - all.length })
             break
         case "detail":
             var found = catalogue.filter(function (pkg) { return pkg.name === p.name })[0]

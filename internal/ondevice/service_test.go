@@ -126,7 +126,7 @@ func TestListSortsHidesAndMarksInstalled(t *testing.T) {
 	catalog := standardCatalog()
 	s := newTestService(catalog, standardTablet())
 
-	got, err := s.List(ListRequest{})
+	got, err := s.List(ListRequest{IncludeIncompatible: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,11 +159,11 @@ func TestListFiltersAndPages(t *testing.T) {
 	if want := []string{"appload", "xovi"}; !reflect.DeepEqual(names(got.Packages), want) {
 		t.Errorf("installed = %v, want %v", names(got.Packages), want)
 	}
-	got, _ = s.List(ListRequest{Offset: 1, Limit: 1})
+	got, _ = s.List(ListRequest{Offset: 1, Limit: 1, IncludeIncompatible: true})
 	if want := []string{"koreader"}; !reflect.DeepEqual(names(got.Packages), want) || got.Total != 3 || got.Offset != 1 {
 		t.Errorf("page = %v total %d offset %d", names(got.Packages), got.Total, got.Offset)
 	}
-	got, _ = s.List(ListRequest{Offset: 99})
+	got, _ = s.List(ListRequest{Offset: 99, IncludeIncompatible: true})
 	if len(got.Packages) != 0 || got.Offset != 3 {
 		t.Errorf("a page past the end should be empty, got %v at %d", names(got.Packages), got.Offset)
 	}
@@ -357,5 +357,28 @@ func TestInstallReportsVellumFailure(t *testing.T) {
 
 	if result.Success || len(result.Errors) == 0 {
 		t.Errorf("result = %+v", result)
+	}
+}
+
+func TestListHidesWhatCannotBeInstalledHere(t *testing.T) {
+	catalog := standardCatalog()
+	catalog.packages = append(catalog.packages, vellum.Package{Name: "bluetooth-settings", Description: "Bluetooth", Compatible: false})
+	s := newTestService(catalog, standardTablet())
+
+	got, err := s.List(ListRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// appload is incompatible in the catalogue but installed, so it stays.
+	if want := []string{"appload", "koreader", "xovi"}; !reflect.DeepEqual(names(got.Packages), want) {
+		t.Errorf("packages = %v, want %v", names(got.Packages), want)
+	}
+	if got.Total != 3 || got.Incompatible != 1 {
+		t.Errorf("total %d, incompatible %d, want 3 and 1", got.Total, got.Incompatible)
+	}
+
+	got, _ = s.List(ListRequest{IncludeIncompatible: true})
+	if got.Total != 4 || got.Incompatible != 0 {
+		t.Errorf("with the toggle on: total %d, incompatible %d", got.Total, got.Incompatible)
 	}
 }
