@@ -79,6 +79,15 @@ Window {
         function (next) { loader.item.startJob(); next() },
         function (next) { endpoint().finish({ success: true }); next() },
         function (next) { shoot("14-upgraded", next) },
+        function (next) { loader.item.showTab("system"); next() },
+        function (next) { shoot("15-system", next) },
+        function (next) { loader.item.confirmSystem("rebuild-hashtable"); next() },
+        function (next) { shoot("16-confirm-rebuild", next) },
+        function (next) { loader.item.startSystem(); next() },
+        function (next) { shoot("17-rebuilding", next) },
+        function (next) { loader.item.showTab("all"); loader.item.openPlan("plan", ["retaskable"]); next() },
+        function (next) { loader.item.startJob(); endpoint().finish({ success: true, deferred: ["Build hashtable"] }); next() },
+        function (next) { shoot("18-installed-needs-rebuild", next) },
         function (next) { Qt.quit() }
     ]
 

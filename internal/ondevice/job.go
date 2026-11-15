@@ -42,6 +42,8 @@ type Event struct {
 	Progress *Progress `json:"progress,omitempty"`
 	// Result is set on "done".
 	Result *InstallResult `json:"result,omitempty"`
+	// At is when the event was recorded, in Unix seconds.
+	At int64 `json:"at,omitempty"`
 }
 
 const (
@@ -79,6 +81,11 @@ func checkJob(action string, names []string) error {
 	switch action {
 	case ActionInstall, ActionRemove:
 		return checkNames(names)
+	case ActionRestart, ActionRebuildHashtable:
+		if len(names) > 0 {
+			return fmt.Errorf("%s takes no packages", action)
+		}
+		return nil
 	case ActionUpgrade:
 		if len(names) == 0 {
 			return nil
@@ -181,6 +188,7 @@ func (j *Jobs) RunWorker(action string, names []string, run func(names []string,
 	write := func(e Event) {
 		seq++
 		e.Seq = seq
+		e.At = time.Now().Unix()
 		line, _ := json.Marshal(e)
 		f.Write(append(line, '\n'))
 		// The stock UI may be restarted, or the tablet rebooted, at any point in a job.

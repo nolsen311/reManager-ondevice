@@ -165,7 +165,9 @@ func (h *Handler) call(ctx context.Context, t Transport, req request) (any, erro
 			return nil, err
 		}
 		return h.Service.PlanUpgrade(p.Names)
-	case ActionInstall, ActionRemove, ActionUpgrade:
+	case "system":
+		return h.Service.SystemStatus(), nil
+	case ActionInstall, ActionRemove, ActionUpgrade, ActionRestart, ActionRebuildHashtable:
 		var p namesParams
 		if err := params(&p); err != nil {
 			return nil, err

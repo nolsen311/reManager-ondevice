@@ -78,9 +78,14 @@ Item {
             reply(req.id, { action: "upgrade", requested: p.names, packages: ["appload", "koreader", "xovi"],
                 upgrades: { appload: "0.5.3-r2 -> 0.5.3-r3", koreader: "2026.06.2-r0 -> 2026.07.1-r1", xovi: "0.3.2-r0 -> 0.3.3-r2" } })
             break
+        case "system":
+            reply(req.id, { canRestart: true, canRebuild: true })
+            break
         case "install":
         case "remove":
         case "upgrade":
+        case "restart":
+        case "rebuild-hashtable":
             reply(req.id, {})
             event({ seq: 1, kind: "started", action: req.method, packages: p.names })
             event({ seq: 2, kind: "progress", progress: { package: "retaskable", index: 1, total: 2, status: "installing", message: "Installing retaskable (2/2)…" } })

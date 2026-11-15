@@ -29,7 +29,10 @@ Rectangle {
     property string errorText: ""
 
     property var device: null
-    property string tab: "all"   // all, installed, updates
+    property string tab: "all"   // all, installed, updates, system
+    property var system: ({ canRestart: false, canRebuild: false })
+    // The system job the confirm screen is asking about: restart or rebuild-hashtable.
+    property string confirmAction: ""
     property int offset: 0
     property int total: 0
     property bool showIncompatible: false
@@ -111,14 +114,41 @@ Rectangle {
             entry.callback(resp.result)
     }
 
+    function isSystemJob(action) {
+        return action === "restart" || action === "rebuild-hashtable"
+    }
+
     function start() {
+        request("system", {}, function (result) { system = result })
         request("job", {}, function (job) {
-            if (job.running) {
-                showJob(job.events)
+            var events = job.events || []
+            var last = events.length > 0 ? events[events.length - 1] : null
+            var first = events.length > 0 ? events[0] : null
+            // A restart or rebuild closes this app partway, so its result is shown when the app is next opened, if that is soon after.
+            var recentSystemJob = last !== null && last.kind === "done" && first.kind === "started"
+                && isSystemJob(first.action) && Date.now() / 1000 - last.at < 600
+            if (job.running || recentSystemJob) {
+                showJob(events)
             } else {
                 loadList(0)
             }
         })
+    }
+
+    function confirmSystem(action) {
+        confirmAction = action
+        screen = "confirm"
+    }
+
+    function startSystem() {
+        jobAction = confirmAction
+        jobPackages = []
+        jobMessage = "Starting…"
+        jobIndex = 0
+        jobTotal = 0
+        jobResult = null
+        screen = "progress"
+        request(confirmAction, { names: [] }, function () {})
     }
 
     function loadList(newOffset) {
@@ -157,6 +187,13 @@ Rectangle {
     function showTab(name) {
         tab = name
         upgrades = []
+        if (name === "system") {
+            packages = []
+            total = 0
+            screen = "list"
+            request("system", {}, function (result) { system = result })
+            return
+        }
         loadList(0)
     }
 
@@ -355,14 +392,58 @@ Rectangle {
                     inverted: root.tab === "updates"
                     onTapped: root.showTab("updates")
                 }
+                TapButton {
+                    unit: root.unit
+                    label: "System"
+                    inverted: root.tab === "system"
+                    onTapped: root.showTab("system")
+                }
             }
-            Text {
-                anchors { right: parent.right; rightMargin: 40 * unit; verticalCenter: tabs.verticalCenter }
-                text: root.busy ? (root.tab === "updates" ? "Checking…" : "Loading…")
-                    : root.tab === "updates" ? root.total + (root.total === 1 ? " update" : " updates")
-                    : root.total + (root.total === 1 ? " mod" : " mods")
-                font.pixelSize: 30 * unit
-                color: "#444444"
+
+            Column {
+                visible: root.tab === "system"
+                anchors { top: tabs.bottom; topMargin: 48 * unit; left: parent.left; right: parent.right; leftMargin: 40 * unit; rightMargin: 40 * unit }
+                spacing: 28 * unit
+
+                Text {
+                    width: parent.width
+                    text: "Restart with mods"
+                    font.pixelSize: 38 * unit
+                    font.bold: true
+                }
+                Text {
+                    width: parent.width
+                    text: "Restarts the reMarkable UI with xovi, so installed, removed or updated mods take effect. This app closes while it happens."
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 30 * unit
+                }
+                TapButton {
+                    unit: root.unit
+                    label: "Restart…"
+                    enabled: root.system.canRestart && !root.busy
+                    onTapped: root.confirmSystem("restart")
+                }
+                Item { width: 1; height: 24 * root.unit }
+                Text {
+                    width: parent.width
+                    text: "Rebuild hashtable"
+                    font.pixelSize: 38 * unit
+                    font.bold: true
+                }
+                Text {
+                    width: parent.width
+                    text: root.system.canRebuild
+                        ? "UI mods find parts of the reMarkable interface through the hashtable. Rebuild it after an OS update, or when a mod asks for it. Takes about a minute and restarts the UI."
+                        : "Needs qt-resource-rebuilder, which is not installed."
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 30 * unit
+                }
+                TapButton {
+                    unit: root.unit
+                    label: "Rebuild…"
+                    enabled: root.system.canRebuild && !root.busy
+                    onTapped: root.confirmSystem("rebuild-hashtable")
+                }
             }
 
             Item {
@@ -432,7 +513,7 @@ Rectangle {
                         }
                         Text {
                             anchors { left: parent.left; leftMargin: 40 * root.unit; right: parent.right; rightMargin: 40 * root.unit; top: rowName.bottom; topMargin: 6 * root.unit }
-                            text: root.tab === "updates" ? (modelData.from ? modelData.from + "  →  " + modelData.to : "New: " + modelData.to) : modelData.description
+                            text: root.tab === "updates" ? (modelData.from ? modelData.from + "  →  " + modelData.to : "New: " + modelData.to) : (modelData.description || "")
                             elide: Text.ElideRight
                             maximumLineCount: 1
                             font.pixelSize: 28 * root.unit
@@ -446,13 +527,14 @@ Rectangle {
                 }
             }
             Text {
-                visible: !root.busy && root.packages.length === 0 && root.errorText === ""
+                visible: root.tab !== "system" && !root.busy && root.packages.length === 0 && root.errorText === ""
                 anchors.centerIn: parent
                 text: root.tab === "updates" ? "Everything is up to date." : root.tab === "installed" ? "Nothing installed yet." : "The catalogue is empty."
                 font.pixelSize: 34 * unit
             }
 
             Item {
+                visible: root.tab !== "system"
                 anchors { left: parent.left; right: parent.right; bottom: parent.bottom; bottomMargin: 36 * unit }
                 height: 96 * unit
                 TapButton {
@@ -465,7 +547,10 @@ Rectangle {
                 Text {
                     visible: !updateAll.visible
                     anchors.centerIn: parent
-                    text: "Page " + (Math.floor(root.offset / root.pageSize) + 1) + " of " + Math.max(1, Math.ceil(root.total / root.pageSize))
+                    text: root.busy ? (root.tab === "updates" ? "Checking…" : "Loading…")
+                        : "Page " + (Math.floor(root.offset / root.pageSize) + 1) + " of " + Math.max(1, Math.ceil(root.total / root.pageSize))
+                          + "\n" + root.total + (root.tab === "updates" ? (root.total === 1 ? " update" : " updates") : (root.total === 1 ? " mod" : " mods"))
+                    horizontalAlignment: Text.AlignHCenter
                     font.pixelSize: 30 * unit
                 }
                 TapButton {
@@ -684,6 +769,58 @@ Rectangle {
             }
         }
 
+        // ---- confirm a restart or rebuild ----
+        Item {
+            visible: root.screen === "confirm"
+            anchors.fill: parent
+
+            Column {
+                anchors { top: parent.top; topMargin: 36 * unit; left: parent.left; right: parent.right; margins: 40 * unit }
+                spacing: 24 * unit
+
+                Text {
+                    width: parent.width
+                    text: root.confirmAction === "restart" ? "Restart the reMarkable UI?" : "Rebuild the hashtable?"
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 44 * unit
+                    font.bold: true
+                }
+                Text {
+                    width: parent.width
+                    text: root.confirmAction === "restart"
+                        ? "The screen goes blank for a few seconds and the reMarkable UI starts again with mods. This app closes; open it again afterwards to see the result."
+                        : "The reMarkable UI stops while the hashtable is rebuilt, which takes about a minute. If you have a passcode, enter it on the screen when asked. The UI then starts again with mods. This app closes; open it again afterwards to see the result."
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 32 * unit
+                }
+                Text {
+                    width: parent.width
+                    text: "If the reMarkable UI does not come back, hold the power button to restart the tablet. It always starts without mods."
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 28 * unit
+                    color: "#444444"
+                }
+            }
+
+            Item {
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom; bottomMargin: 36 * unit }
+                height: 96 * unit
+                TapButton {
+                    anchors { left: parent.left; leftMargin: 40 * unit }
+                    unit: root.unit
+                    label: "Cancel"
+                    onTapped: root.screen = root.tab === "system" ? "list" : "progress"
+                }
+                TapButton {
+                    anchors { right: parent.right; rightMargin: 40 * unit }
+                    unit: root.unit
+                    label: root.confirmAction === "restart" ? "Restart" : "Rebuild"
+                    inverted: true
+                    onTapped: root.startSystem()
+                }
+            }
+        }
+
         // ---- progress ----
         Item {
             visible: root.screen === "progress"
@@ -693,7 +830,11 @@ Rectangle {
             readonly property bool failed: done && !root.jobResult.success
             readonly property var words: root.jobAction === "remove" ? ["Removing", "Removed", "Removal failed"]
                 : root.jobAction === "upgrade" ? ["Updating", "Updated", "Update failed"]
+                : root.jobAction === "restart" ? ["Restarting the reMarkable UI", "Restarted the reMarkable UI", "Restart failed"]
+                : root.jobAction === "rebuild-hashtable" ? ["Rebuilding the hashtable", "Rebuilt the hashtable", "Rebuild failed"]
                 : ["Installing", "Installed", "Install failed"]
+            readonly property bool system: root.isSystemJob(root.jobAction)
+            readonly property bool hashtableLeft: done && !!root.jobResult.deferred && root.jobResult.deferred.some(function (s) { return s.toLowerCase().indexOf("hashtable") >= 0 })
 
             Column {
                 anchors { top: parent.top; topMargin: 36 * unit; left: parent.left; right: parent.right; margins: 40 * unit }
@@ -701,7 +842,8 @@ Rectangle {
 
                 Text {
                     width: parent.width
-                    text: !parent.parent.done ? parent.parent.words[0] + " " + root.describe(root.jobPackages)
+                    text: parent.parent.system ? parent.parent.words[!parent.parent.done ? 0 : parent.parent.failed ? 2 : 1]
+                        : !parent.parent.done ? parent.parent.words[0] + " " + root.describe(root.jobPackages)
                         : parent.parent.failed ? parent.parent.words[2] : parent.parent.words[1] + " " + root.describe(root.jobPackages)
                     wrapMode: Text.Wrap
                     font.pixelSize: 44 * unit
@@ -719,7 +861,9 @@ Rectangle {
                 Text {
                     width: parent.width
                     visible: !parent.parent.done
-                    text: "You can close this screen. The work carries on, and this page shows where it got to when you come back."
+                    text: parent.parent.system
+                        ? "The reMarkable UI is about to restart and this app will close. Open it again afterwards to see the result."
+                        : "You can close this screen. The work carries on, and this page shows where it got to when you come back."
                     wrapMode: Text.Wrap
                     font.pixelSize: 28 * unit
                     color: "#444444"
@@ -736,15 +880,17 @@ Rectangle {
                 Text {
                     width: parent.width
                     visible: parent.parent.done && root.jobResult.deferred !== undefined && root.jobResult.deferred.length > 0
-                    text: root.jobResult && root.jobResult.deferred ? "Left for you to do from a computer:\n" + root.jobResult.deferred.map(function (s) { return "•  " + s }).join("\n") : ""
+                    text: root.jobResult && root.jobResult.deferred ? "Still to do:\n" + root.jobResult.deferred.map(function (s) { return "•  " + s }).join("\n") : ""
                     wrapMode: Text.Wrap
                     lineHeight: 1.25
                     font.pixelSize: 32 * unit
                 }
                 Text {
                     width: parent.width
-                    visible: parent.parent.done && !parent.parent.failed
-                    text: "Some changes only show after xovi is restarted."
+                    visible: parent.parent.done && !parent.parent.failed && !parent.parent.system
+                    text: parent.parent.hashtableLeft
+                        ? "UI mods need the hashtable rebuilt before they work. That also restarts the reMarkable UI, so it is the only restart needed."
+                        : "Some changes only show after the reMarkable UI is restarted with mods."
                     wrapMode: Text.Wrap
                     font.pixelSize: 28 * unit
                     color: "#444444"
@@ -752,12 +898,19 @@ Rectangle {
             }
 
             TapButton {
+                anchors { left: parent.left; leftMargin: 40 * unit; bottom: parent.bottom; bottomMargin: 36 * unit }
+                unit: root.unit
+                visible: parent.done && !parent.failed && !parent.system && (parent.hashtableLeft ? root.system.canRebuild : root.system.canRestart)
+                label: parent.hashtableLeft ? "Rebuild hashtable…" : "Restart now…"
+                onTapped: root.confirmSystem(parent.hashtableLeft ? "rebuild-hashtable" : "restart")
+            }
+            TapButton {
                 anchors { right: parent.right; rightMargin: 40 * unit; bottom: parent.bottom; bottomMargin: 36 * unit }
                 unit: root.unit
                 visible: parent.done
                 label: "Done"
                 inverted: true
-                onTapped: { root.upgrades = []; root.loadList(root.tab === "updates" ? 0 : root.offset) }
+                onTapped: { root.upgrades = []; if (root.tab === "system") root.showTab("all"); else root.loadList(root.tab === "updates" ? 0 : root.offset) }
             }
         }
     }

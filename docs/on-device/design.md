@@ -282,6 +282,16 @@ ondevice/manifest.json          AppLoad manifest
   runs `vellum add <provider>`. That only records the provider as installed
   on purpose; it changes no package. If no installed provider, or more than
   one, matches, the removal is refused with Vellum's message.
+- Restart and hashtable rebuild (System tab, and offered after an install
+  that asks for a rebuild) also run in the worker, because both stop the
+  stock UI and with it this app's backend. Restart runs `xovi/start` after
+  `systemctl reset-failed xochitl`. The rebuild reuses desktop reManager's
+  `RebuildHashtableDialog`: it goes through `launcherctl` when a launcher
+  manages the UI. Otherwise it runs `xovi/rebuild_hashtable` and then starts
+  the UI with mods, even if the rebuild failed, since the rebuild leaves the
+  UI stopped. The result is shown the next time the app opens, within ten
+  minutes. Neither has been run on the Move yet. If the UI does not come
+  back, restarting the tablet brings back the stock UI (section 5).
 - Upgrades come from Vellum's own solver (`upgrade --simulate`) after an
   index refresh, for everything or for named packages. Upgrading the
   packages the app runs on is allowed; they take effect when xovi restarts.
@@ -324,6 +334,8 @@ ondevice/manifest.json          AppLoad manifest
 - There is no search yet: it needs an on-screen keyboard.
 - Closing the app stops the backend. A running install is in its own worker
   and carries on.
+- The icon (`ondevice/icon.svg`, rendered to `icon.png`) is the desktop
+  icon without its background, black on transparent.
 - `ondevice/build.sh` builds the app folder (manifest, icon, `resources.rcc`,
   `backend/entry`) into `ondevice/output/remanager`.
 

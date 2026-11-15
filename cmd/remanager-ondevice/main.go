@@ -168,6 +168,9 @@ func runWorker(args []string, service *ondevice.Service) error {
 		ondevice.ActionInstall: service.Install,
 		ondevice.ActionRemove:  service.Remove,
 		ondevice.ActionUpgrade: service.Upgrade,
+		// Only from the worker: these restart the UI the app is drawn in, and from a shell over SSH desktop reManager or xovi's own scripts do the same.
+		ondevice.ActionRestart:          service.Restart,
+		ondevice.ActionRebuildHashtable: service.RebuildHashtable,
 	}[args[0]]
 	if run == nil {
 		return fmt.Errorf("unknown worker action %q", args[0])
