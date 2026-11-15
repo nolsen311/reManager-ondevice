@@ -28,7 +28,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install vbuild
         run: |
@@ -126,7 +126,7 @@ jobs:
           echo "Key fingerprint: $(openssl rsa -pubin -in "$SITE/$KEY_NAME.rsa.pub" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
           find "$SITE" -type f | sort >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: remanager-ondevice-${{ steps.version.outputs.pkgver }}-r${{ steps.version.outputs.pkgrel }}
           path: ${{ env.SITE }}

@@ -16,7 +16,7 @@ jobs:
     env:
       PACKAGES: ./internal/executor ./internal/appload ./internal/ondevice ./internal/vellum ./internal/installer ./cmd/remanager-ondevice
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-go@v5
         with:
@@ -54,7 +54,7 @@ jobs:
           echo "$count screens rendered"
           [ "$count" -ge 20 ]
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: screens
           path: ${{ runner.temp }}/screens
