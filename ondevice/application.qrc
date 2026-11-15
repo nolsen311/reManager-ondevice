@@ -2,5 +2,7 @@
     <qresource>
         <file>ui/Main.qml</file>
         <file>ui/TapButton.qml</file>
+        <file>ui/SmallButton.qml</file>
+        <file>ui/SearchKeyboard.qml</file>
     </qresource>
 </RCC>

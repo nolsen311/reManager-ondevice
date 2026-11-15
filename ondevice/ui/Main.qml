@@ -36,6 +36,10 @@ Rectangle {
     property int offset: 0
     property int total: 0
     property bool showIncompatible: false
+    // The search applied to the list, and the one being typed on the search screen.
+    property string query: ""
+    property string draftQuery: ""
+    property int draftMatches: -1
     property int hiddenIncompatible: 0
     property var packages: []
     property var upgrades: []
@@ -135,6 +139,38 @@ Rectangle {
         })
     }
 
+    function openSearch() {
+        draftQuery = query
+        draftMatches = -1
+        screen = "search"
+        countMatches()
+    }
+
+    function editDraft(text) {
+        draftQuery = text
+        countTimer.restart()
+    }
+
+    // How many mods the search being typed would show, with the list's other filters. Asked for after a pause in typing, so each key does not cost a request.
+    function countMatches() {
+        var asked = draftQuery
+        request("list", { installedOnly: tab === "installed", includeIncompatible: showIncompatible, query: asked, offset: 0, limit: 1 }, function (result) {
+            if (asked === draftQuery)
+                draftMatches = result.total
+        })
+    }
+
+    function applySearch(text) {
+        query = text.trim()
+        loadList(0)
+    }
+
+    Timer {
+        id: countTimer
+        interval: 600
+        onTriggered: root.countMatches()
+    }
+
     function confirmSystem(action) {
         confirmAction = action
         screen = "confirm"
@@ -168,7 +204,7 @@ Rectangle {
             })
             return
         }
-        request("list", { installedOnly: tab === "installed", includeIncompatible: showIncompatible, offset: newOffset, limit: pageSize }, function (result) {
+        request("list", { installedOnly: tab === "installed", includeIncompatible: showIncompatible, query: query, offset: newOffset, limit: pageSize }, function (result) {
             packages = result.packages
             total = result.total
             offset = result.offset
@@ -187,6 +223,8 @@ Rectangle {
     function showTab(name) {
         tab = name
         upgrades = []
+        if (name === "updates" || name === "system")
+            query = ""
         if (name === "system") {
             packages = []
             total = 0
@@ -314,13 +352,15 @@ Rectangle {
             font.bold: true
         }
         Text {
-            anchors { left: parent.left; leftMargin: 40 * unit; bottom: parent.bottom; bottomMargin: 18 * unit }
-            text: root.device ? root.device.name + " · OS " + root.device.firmware + (root.device.tested ? "" : " · untested model")
-                + (root.device.appVersion ? " · reManager " + root.device.appVersion : "") : ""
+            anchors { left: parent.left; leftMargin: 40 * unit; right: closeButton.left; rightMargin: 24 * unit; bottom: parent.bottom; bottomMargin: 18 * unit }
+            text: root.device ? root.device.name.replace("reMarkable ", "") + " · OS " + root.device.firmware + (root.device.tested ? "" : " · untested model")
+                + (root.device.appVersion ? " · v" + root.device.appVersion : "") : ""
+            elide: Text.ElideRight
             font.pixelSize: 28 * unit
             color: "#444444"
         }
         TapButton {
+            id: closeButton
             anchors { right: parent.right; rightMargin: 40 * unit; verticalCenter: parent.verticalCenter }
             unit: root.unit
             label: "Close"
@@ -450,33 +490,43 @@ Rectangle {
             Item {
                 id: osFilter
                 anchors { top: tabs.bottom; left: parent.left; right: parent.right }
-                readonly property bool shown: root.tab === "all" && (root.showIncompatible || root.hiddenIncompatible > 0)
+                readonly property bool shown: root.tab === "all" || root.tab === "installed"
+                readonly property bool osShown: root.tab === "all" && (root.showIncompatible || root.hiddenIncompatible > 0)
                 visible: shown
                 height: shown ? 92 * unit : 0
 
-                Text {
+                Row {
                     anchors { left: parent.left; leftMargin: 40 * unit; verticalCenter: parent.verticalCenter }
-                    text: root.showIncompatible ? "Showing mods for other OS versions"
-                        : root.hiddenIncompatible + (root.hiddenIncompatible === 1 ? " mod is" : " mods are") + " hidden: not for this OS"
-                    font.pixelSize: 28 * unit
-                    color: "#444444"
-                }
-                Rectangle {
-                    anchors { right: parent.right; rightMargin: 40 * unit; verticalCenter: parent.verticalCenter }
-                    width: toggleLabel.implicitWidth + 40 * unit
-                    height: 64 * unit
-                    border.color: "black"
-                    border.width: Math.max(2, 2 * unit)
-                    Text {
-                        id: toggleLabel
-                        anchors.centerIn: parent
-                        text: root.showIncompatible ? "Hide them" : "Show"
-                        font.pixelSize: 28 * unit
-                    }
-                    MouseArea {
-                        anchors.fill: parent
+                    spacing: 16 * unit
+                    SmallButton {
+                        unit: root.unit
+                        label: root.query === "" ? "Search" : "Search: " + (root.query.length > 14 ? root.query.substring(0, 13) + "…" : root.query)
                         enabled: !root.busy
-                        onClicked: { root.showIncompatible = !root.showIncompatible; root.loadList(0) }
+                        onTapped: root.openSearch()
+                    }
+                    SmallButton {
+                        visible: root.query !== ""
+                        unit: root.unit
+                        label: "Clear"
+                        enabled: !root.busy
+                        onTapped: root.applySearch("")
+                    }
+                }
+                Row {
+                    visible: osFilter.osShown
+                    anchors { right: parent.right; rightMargin: 40 * unit; verticalCenter: parent.verticalCenter }
+                    spacing: 16 * unit
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: root.showIncompatible ? "All OS versions" : root.hiddenIncompatible + " not for this OS"
+                        font.pixelSize: 26 * unit
+                        color: "#444444"
+                    }
+                    SmallButton {
+                        unit: root.unit
+                        label: root.showIncompatible ? "Hide" : "Show"
+                        enabled: !root.busy
+                        onTapped: { root.showIncompatible = !root.showIncompatible; root.loadList(0) }
                     }
                 }
             }
@@ -530,7 +580,9 @@ Rectangle {
             Text {
                 visible: root.tab !== "system" && !root.busy && root.packages.length === 0 && root.errorText === ""
                 anchors.centerIn: parent
-                text: root.tab === "updates" ? "Everything is up to date." : root.tab === "installed" ? "Nothing installed yet." : "The catalogue is empty."
+                text: root.tab === "updates" ? "Everything is up to date."
+                    : root.query !== "" ? "No mods match “" + root.query + "”."
+                    : root.tab === "installed" ? "Nothing installed yet." : "The catalogue is empty."
                 font.pixelSize: 34 * unit
             }
 
@@ -766,6 +818,78 @@ Rectangle {
                     label: parent.parent.verb
                     inverted: true
                     onTapped: root.startJob()
+                }
+            }
+        }
+
+        // ---- search ----
+        Item {
+            visible: root.screen === "search"
+            anchors.fill: parent
+
+            Text {
+                id: searchTitle
+                anchors { top: parent.top; topMargin: 36 * unit; left: parent.left; leftMargin: 40 * unit }
+                text: root.tab === "installed" ? "Search installed mods" : "Search mods"
+                font.pixelSize: 44 * unit
+                font.bold: true
+            }
+            Rectangle {
+                id: searchBox
+                anchors { top: searchTitle.bottom; topMargin: 28 * unit; left: parent.left; right: parent.right; leftMargin: 40 * unit; rightMargin: 40 * unit }
+                height: 100 * unit
+                border.color: "black"
+                border.width: Math.max(2, 3 * unit)
+                Text {
+                    anchors { left: parent.left; leftMargin: 24 * unit; right: clearDraft.left; rightMargin: 16 * unit; verticalCenter: parent.verticalCenter }
+                    text: root.draftQuery === "" ? "Name or description" : root.draftQuery + "▏"
+                    color: root.draftQuery === "" ? "#888888" : "black"
+                    elide: Text.ElideLeft
+                    font.pixelSize: 40 * unit
+                }
+                SmallButton {
+                    id: clearDraft
+                    anchors { right: parent.right; rightMargin: 18 * unit; verticalCenter: parent.verticalCenter }
+                    visible: root.draftQuery !== ""
+                    unit: root.unit
+                    label: "Clear"
+                    onTapped: root.editDraft("")
+                }
+            }
+            Text {
+                anchors { top: searchBox.bottom; topMargin: 20 * unit; left: parent.left; leftMargin: 40 * unit }
+                text: root.draftMatches < 0 ? " " : root.draftMatches === 0 ? "No mods match" : root.draftMatches + (root.draftMatches === 1 ? " mod matches" : " mods match")
+                font.pixelSize: 30 * unit
+                color: "#444444"
+            }
+
+            SearchKeyboard {
+                anchors { left: parent.left; right: parent.right; bottom: searchButtons.top; leftMargin: 40 * unit; rightMargin: 40 * unit; bottomMargin: 48 * unit }
+                height: implicitHeight
+                unit: root.unit
+                onTyped: (character) => {
+                    if (root.draftQuery.length < 40 && !(character === " " && (root.draftQuery === "" || root.draftQuery.endsWith(" "))))
+                        root.editDraft(root.draftQuery + character)
+                }
+                onBackspace: root.editDraft(root.draftQuery.slice(0, -1))
+            }
+
+            Item {
+                id: searchButtons
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom; bottomMargin: 36 * unit }
+                height: 96 * unit
+                TapButton {
+                    anchors { left: parent.left; leftMargin: 40 * unit }
+                    unit: root.unit
+                    label: "Cancel"
+                    onTapped: root.screen = "list"
+                }
+                TapButton {
+                    anchors { right: parent.right; rightMargin: 40 * unit }
+                    unit: root.unit
+                    label: root.draftQuery.trim() === "" ? "Show all" : "Show results"
+                    inverted: true
+                    onTapped: root.applySearch(root.draftQuery)
                 }
             }
         }

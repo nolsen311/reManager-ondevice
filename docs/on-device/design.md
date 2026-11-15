@@ -368,7 +368,10 @@ ondevice/manifest.json          AppLoad manifest
   answers. It treats "ready" as a hint to ask at once, and it gives up on a
   request with no reply after 30 s (3 min for index refreshes and solves)
   instead of staying busy.
-- There is no search yet: it needs an on-screen keyboard.
+- Search (All mods and Installed) matches names and descriptions. AppLoad's
+  on-screen keyboard only feeds external qtfb apps, so the app has its own:
+  digits, letters, hyphen, space and backspace. While typing, it shows how
+  many mods match, asking the backend after a 0.6 s pause.
 - Closing the app stops the backend. A running install is in its own worker
   and carries on.
 - The icon (`ondevice/icon.svg`, rendered to `icon.png`) is the desktop

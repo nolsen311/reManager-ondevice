@@ -88,6 +88,12 @@ Window {
         function (next) { loader.item.showTab("all"); loader.item.openPlan("plan", ["retaskable"]); next() },
         function (next) { loader.item.startJob(); endpoint().finish({ success: true, deferred: ["Build hashtable"] }); next() },
         function (next) { shoot("18-installed-needs-rebuild", next) },
+        function (next) { loader.item.showTab("all"); next() },
+        function (next) { loader.item.openSearch(); loader.item.editDraft("xovi"); next() },
+        function (next) { wait(next) },
+        function (next) { shoot("19-search", next) },
+        function (next) { loader.item.applySearch(loader.item.draftQuery); next() },
+        function (next) { shoot("20-search-results", next) },
         function (next) { Qt.quit() }
     ]
 

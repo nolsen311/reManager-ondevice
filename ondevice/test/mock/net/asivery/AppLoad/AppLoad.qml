@@ -52,7 +52,11 @@ Item {
                 : { running: false, events: [] })
             break
         case "list":
-            var matching = catalogue.filter(function (pkg) { return !p.installedOnly || pkg.installed })
+            var q = (p.query || "").toLowerCase()
+            var matching = catalogue.filter(function (pkg) {
+                return (!p.installedOnly || pkg.installed)
+                    && (q === "" || pkg.name.indexOf(q) >= 0 || pkg.description.toLowerCase().indexOf(q) >= 0)
+            })
             var all = matching.filter(function (pkg) { return p.includeIncompatible || pkg.compatible || pkg.installed })
             reply(req.id, { packages: all.slice(p.offset, p.offset + p.limit), total: all.length, offset: p.offset, incompatible: matching.length - all.length })
             break
