@@ -403,7 +403,10 @@ ondevice/manifest.json          AppLoad manifest
 - Status checks (System tab), each left out when it cannot be read:
   hashtable missing or built for another OS version (fix: rebuild);
   tripletap not installed (fix: install it through the usual plan) or left
-  paused by a rebuild (fix: turn it on); automatic OS updates on; OS changed
+  paused by a rebuild (fix: turn it on); this app's repository line or
+  signing key missing from Vellum, checked only when the app was installed
+  through Vellum (fix: restore both, from a copy of the key built into the
+  app, then refresh the index); automatic OS updates on; OS changed
   since Vellum last ran or `vellum reenable` needed; Vellum missing core
   packages. The last three are reported only: fixing them writes to the root
   partition, which this app does not do. Desktop checks left out: xovi and

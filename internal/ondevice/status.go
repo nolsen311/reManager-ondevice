@@ -60,6 +60,12 @@ func (s *Service) Checks(running bool) []Check {
 		}
 	}
 
+	if installedErr == nil {
+		if check, ok := s.repositoryCheck(installed); ok {
+			checks = append(checks, check)
+		}
+	}
+
 	if enabled, ok := s.autoUpdatesOn(); ok {
 		if enabled {
 			checks = append(checks, Check{ID: "auto-updates", Title: "Automatic OS updates are on",

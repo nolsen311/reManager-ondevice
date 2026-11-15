@@ -39,7 +39,3 @@ func TestOfflineHintReachesTheFrontend(t *testing.T) {
 		t.Errorf("error = %q", message)
 	}
 }
-
-type errorString string
-
-func (e errorString) Error() string { return string(e) }

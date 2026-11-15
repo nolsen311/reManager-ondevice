@@ -400,3 +400,7 @@ func TestListHidesWhatCannotBeInstalledHere(t *testing.T) {
 		t.Errorf("with the toggle on: total %d, incompatible %d", got.Total, got.Incompatible)
 	}
 }
+
+type errorString string
+
+func (e errorString) Error() string { return string(e) }

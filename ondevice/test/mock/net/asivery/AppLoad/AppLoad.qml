@@ -85,6 +85,7 @@ Item {
         case "checks":
             reply(req.id, [
                 { id: "hashtable", ok: false, title: "The hashtable is for another OS version", detail: "Built for 3.26.0.68; this is 3.27.3.0. UI mods may not work until it is rebuilt.", fix: "rebuild-hashtable" },
+                { id: "repository", ok: false, title: "This app's repository is missing from Vellum", detail: "Updates for reManager will not arrive until it is back. Restoring adds https://nolsen311.github.io/reManager-ondevice to Vellum's list.", fix: "restore-repository" },
                 { id: "tripletap", ok: false, title: "Triple-tap is paused", detail: "A hashtable rebuild paused it and did not turn it back on.", fix: "resume-tripletap" },
                 { id: "auto-updates", ok: false, title: "Automatic OS updates are on", detail: "An OS update stops mods until each supports the new version and the hashtable is rebuilt. Fixing this changes system files, which this app does not do. Use desktop reManager." },
                 { id: "vellum-ok", ok: true, title: "The hashtable matches OS 3.27.3.0" } ])

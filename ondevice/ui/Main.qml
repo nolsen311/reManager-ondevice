@@ -182,6 +182,8 @@ Rectangle {
             confirmSystem("rebuild-hashtable")
         else if (fix === "resume-tripletap")
             request("resumeTripletap", {}, function () { loadChecks() })
+        else if (fix === "restore-repository")
+            request("restoreRepository", {}, function () { loadChecks() })
         else if (fix === "install-tripletap")
             openPlan("plan", ["tripletap"])
     }
@@ -528,7 +530,8 @@ Rectangle {
                             visible: !!modelData.fix
                             unit: root.unit
                             enabled: !root.busy
-                            label: modelData.fix === "rebuild-hashtable" ? "Rebuild…" : modelData.fix === "resume-tripletap" ? "Turn on" : "Install…"
+                            label: modelData.fix === "rebuild-hashtable" ? "Rebuild…" : modelData.fix === "resume-tripletap" ? "Turn on"
+                                : modelData.fix === "restore-repository" ? "Restore" : "Install…"
                             onTapped: root.fixCheck(modelData.fix)
                         }
                     }
