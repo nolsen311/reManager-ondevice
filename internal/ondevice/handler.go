@@ -21,6 +21,8 @@ const (
 	MsgResponse int32 = 2
 	// MsgInstallEvent is backend to frontend, unprompted: one Event of the running install.
 	MsgInstallEvent int32 = 3
+	// MsgReady is backend to frontend, with no contents, each time a frontend attaches. AppLoad drops what a frontend sends before the backend has connected, so the frontend waits for this before its first request.
+	MsgReady int32 = 4
 )
 
 // Transport is the AppLoad connection, or a stand-in for it in tests.
@@ -78,6 +80,7 @@ func (h *Handler) Serve(ctx context.Context, t Transport) error {
 		case appload.TypeTerminate:
 			return nil
 		case appload.TypeFrontendAttached:
+			t.Send(MsgReady, "")
 			// A frontend that opens during an install, or after the stock UI restarted, picks the install back up.
 			if h.Jobs.Running() {
 				h.follow(ctx, t, 0)

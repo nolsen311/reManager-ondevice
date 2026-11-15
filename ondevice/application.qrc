@@ -1,0 +1,6 @@
+<RCC>
+    <qresource>
+        <file>ui/Main.qml</file>
+        <file>ui/TapButton.qml</file>
+    </qresource>
+</RCC>

@@ -306,6 +306,9 @@ func TestHandlerResumesAnInstallWhenAFrontendAttaches(t *testing.T) {
 	f := serve(t, h)
 	f.in <- appload.Message{Type: appload.TypeFrontendAttached, Contents: "1"}
 
+	if ready := f.next(t); ready.Type != MsgReady {
+		t.Fatalf("want the backend to announce itself first, got type %d", ready.Type)
+	}
 	var first Event
 	json.Unmarshal([]byte(f.next(t).Contents), &first)
 	if first.Kind != EventStarted {

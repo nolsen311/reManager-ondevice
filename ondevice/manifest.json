@@ -1,0 +1,8 @@
+{
+    "id": "remanager",
+    "name": "reManager",
+    "loadsBackend": true,
+    "entry": "/ui/Main.qml",
+    "canHaveMultipleFrontends": false,
+    "supportsScaling": true
+}

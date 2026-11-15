@@ -1,0 +1,587 @@
+import QtQuick 2.15
+import net.asivery.AppLoad 1.0
+
+// reManager's on-tablet frontend. It holds no package logic: every screen shows what the backend answered.
+Rectangle {
+    id: root
+    anchors.fill: parent
+    color: "white"
+
+    // AppLoad looks for these two on the root item.
+    signal close
+    function unloading() {
+        // An install runs in its own worker, so stopping the backend never interrupts one.
+        endpoint.terminate()
+    }
+
+    // Sizes are in units of 1/954 of the width, the Paper Pro Move's portrait width, so a window or another screen scales the layout.
+    readonly property real unit: width / 954
+    readonly property int pageSize: 9
+
+    // Message types shared with internal/ondevice/handler.go.
+    readonly property int msgRequest: 1
+    readonly property int msgResponse: 2
+    readonly property int msgInstallEvent: 3
+    readonly property int msgReady: 4
+
+    property string screen: "starting"   // starting, list, detail, plan, progress
+    property bool busy: false
+    property string errorText: ""
+
+    property var device: null
+    property bool installedOnly: false
+    property int offset: 0
+    property int total: 0
+    property var packages: []
+    property var detail: null
+    property var plan: null
+
+    property var jobPackages: []
+    property string jobMessage: ""
+    property int jobIndex: 0
+    property int jobTotal: 0
+    property var jobResult: null
+
+    property int nextId: 1
+    property var pending: ({})
+
+    function request(method, params, onResult) {
+        var id = nextId++
+        pending[id] = onResult
+        busy = true
+        errorText = ""
+        endpoint.sendMessage(msgRequest, JSON.stringify({ id: id, method: method, params: params || {} }))
+    }
+
+    function handleResponse(resp) {
+        var callback = pending[resp.id]
+        delete pending[resp.id]
+        busy = Object.keys(pending).length > 0
+        if (resp.error) {
+            errorText = resp.error
+            if (screen === "starting")
+                screen = "list"
+            return
+        }
+        if (callback)
+            callback(resp.result)
+    }
+
+    function start() {
+        if (device !== null)
+            return
+        request("device", {}, function (result) { device = result })
+        request("job", {}, function (job) {
+            if (job.running) {
+                showJob(job.events)
+            } else {
+                loadList(0)
+            }
+        })
+    }
+
+    function loadList(newOffset) {
+        request("list", { installedOnly: installedOnly, offset: newOffset, limit: pageSize }, function (result) {
+            packages = result.packages
+            total = result.total
+            offset = result.offset
+            screen = "list"
+        })
+    }
+
+    function openDetail(name) {
+        request("detail", { name: name }, function (result) {
+            detail = result
+            screen = "detail"
+        })
+    }
+
+    function openPlan(name) {
+        request("plan", { names: [name] }, function (result) {
+            plan = result
+            screen = "plan"
+        })
+    }
+
+    function startInstall() {
+        jobPackages = plan.requested
+        jobMessage = "Starting…"
+        jobIndex = 0
+        jobTotal = 0
+        jobResult = null
+        screen = "progress"
+        request("install", { names: plan.requested }, function () {})
+    }
+
+    function showJob(events) {
+        jobResult = null
+        jobMessage = ""
+        screen = "progress"
+        for (var i = 0; i < events.length; i++)
+            handleEvent(events[i])
+    }
+
+    function handleEvent(event) {
+        if (event.kind === "started") {
+            jobPackages = event.packages
+            jobResult = null
+            screen = "progress"
+        } else if (event.kind === "progress") {
+            if (event.progress.message)
+                jobMessage = event.progress.message
+            jobIndex = event.progress.index + 1
+            jobTotal = event.progress.total
+        } else if (event.kind === "done") {
+            jobResult = event.result
+        }
+    }
+
+    AppLoad {
+        id: endpoint
+        applicationID: "remanager"
+        onMessageReceived: (type, contents) => {
+            if (type === root.msgReady) {
+                startTimeout.stop()
+                root.start()
+                return
+            }
+            var data
+            try {
+                data = JSON.parse(contents)
+            } catch (e) {
+                root.errorText = "The backend sent something unreadable."
+                return
+            }
+            if (type === root.msgResponse)
+                root.handleResponse(data)
+            else if (type === root.msgInstallEvent)
+                root.handleEvent(data)
+        }
+    }
+
+    // The backend announces itself once it is connected; a request sent before that is dropped by AppLoad.
+    Timer {
+        id: startTimeout
+        interval: 8000
+        running: true
+        onTriggered: {
+            if (root.device === null) {
+                root.errorText = "The backend did not start."
+                root.screen = "list"
+            }
+        }
+    }
+
+    // ---- header ----
+    Item {
+        id: header
+        anchors { top: parent.top; left: parent.left; right: parent.right }
+        height: 150 * unit
+
+        Text {
+            anchors { left: parent.left; leftMargin: 40 * unit; top: parent.top; topMargin: 28 * unit }
+            text: "reManager"
+            font.pixelSize: 52 * unit
+            font.bold: true
+        }
+        Text {
+            anchors { left: parent.left; leftMargin: 40 * unit; bottom: parent.bottom; bottomMargin: 18 * unit }
+            text: root.device ? root.device.name + " · OS " + root.device.firmware + (root.device.tested ? "" : " · untested model") : ""
+            font.pixelSize: 28 * unit
+            color: "#444444"
+        }
+        TapButton {
+            anchors { right: parent.right; rightMargin: 40 * unit; verticalCenter: parent.verticalCenter }
+            unit: root.unit
+            label: "Close"
+            onTapped: root.close()
+        }
+        Rectangle {
+            anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+            height: Math.max(2, 3 * unit)
+            color: "black"
+        }
+    }
+
+    // ---- error line ----
+    Rectangle {
+        id: errorBar
+        anchors { top: header.bottom; left: parent.left; right: parent.right }
+        height: visible ? errorLabel.implicitHeight + 40 * unit : 0
+        visible: root.errorText !== ""
+        color: "white"
+        border.color: "black"
+        border.width: Math.max(2, 3 * unit)
+
+        Text {
+            id: errorLabel
+            anchors { left: parent.left; right: parent.right; margins: 40 * unit; verticalCenter: parent.verticalCenter }
+            text: "Problem: " + root.errorText
+            wrapMode: Text.Wrap
+            maximumLineCount: 6
+            elide: Text.ElideRight
+            font.pixelSize: 30 * unit
+        }
+    }
+
+    Item {
+        id: body
+        anchors { top: errorBar.bottom; left: parent.left; right: parent.right; bottom: parent.bottom }
+
+        // ---- starting ----
+        Text {
+            visible: root.screen === "starting"
+            anchors.centerIn: parent
+            text: "Starting…"
+            font.pixelSize: 40 * unit
+        }
+
+        // ---- list ----
+        Item {
+            visible: root.screen === "list"
+            anchors.fill: parent
+
+            Row {
+                id: tabs
+                anchors { top: parent.top; topMargin: 24 * unit; left: parent.left; leftMargin: 40 * unit }
+                spacing: 20 * unit
+                TapButton {
+                    unit: root.unit
+                    label: "All mods"
+                    inverted: !root.installedOnly
+                    onTapped: { root.installedOnly = false; root.loadList(0) }
+                }
+                TapButton {
+                    unit: root.unit
+                    label: "Installed"
+                    inverted: root.installedOnly
+                    onTapped: { root.installedOnly = true; root.loadList(0) }
+                }
+            }
+            Text {
+                anchors { right: parent.right; rightMargin: 40 * unit; verticalCenter: tabs.verticalCenter }
+                text: root.busy ? "Loading…" : root.total + (root.total === 1 ? " mod" : " mods")
+                font.pixelSize: 30 * unit
+                color: "#444444"
+            }
+
+            Column {
+                id: rows
+                anchors { top: tabs.bottom; topMargin: 24 * unit; left: parent.left; right: parent.right }
+
+                Repeater {
+                    model: root.packages
+                    delegate: Item {
+                        width: rows.width
+                        height: 132 * root.unit
+
+                        Rectangle {
+                            anchors { left: parent.left; right: parent.right; top: parent.top }
+                            height: Math.max(1, 2 * root.unit)
+                            color: "#888888"
+                        }
+                        Text {
+                            id: rowName
+                            anchors { left: parent.left; leftMargin: 40 * root.unit; top: parent.top; topMargin: 20 * root.unit }
+                            width: parent.width - rowState.width - 120 * root.unit
+                            text: modelData.name
+                            elide: Text.ElideRight
+                            font.pixelSize: 36 * root.unit
+                            font.bold: true
+                            color: modelData.compatible || modelData.installed ? "black" : "#777777"
+                        }
+                        Text {
+                            id: rowState
+                            anchors { right: parent.right; rightMargin: 40 * root.unit; baseline: rowName.baseline }
+                            text: modelData.installed ? "Installed" : modelData.compatible ? "" : "Not for this OS"
+                            font.pixelSize: 28 * root.unit
+                        }
+                        Text {
+                            anchors { left: parent.left; leftMargin: 40 * root.unit; right: parent.right; rightMargin: 40 * root.unit; top: rowName.bottom; topMargin: 6 * root.unit }
+                            text: modelData.description
+                            elide: Text.ElideRight
+                            maximumLineCount: 1
+                            font.pixelSize: 28 * root.unit
+                            color: "#444444"
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: root.openDetail(modelData.name)
+                        }
+                    }
+                }
+            }
+            Text {
+                visible: !root.busy && root.packages.length === 0 && root.errorText === ""
+                anchors.centerIn: parent
+                text: root.installedOnly ? "Nothing installed yet." : "The catalogue is empty."
+                font.pixelSize: 34 * unit
+            }
+
+            Item {
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom; bottomMargin: 36 * unit }
+                height: 96 * unit
+                TapButton {
+                    anchors { left: parent.left; leftMargin: 40 * unit }
+                    unit: root.unit
+                    label: "Previous"
+                    enabled: root.offset > 0 && !root.busy
+                    onTapped: root.loadList(Math.max(0, root.offset - root.pageSize))
+                }
+                Text {
+                    anchors.centerIn: parent
+                    text: "Page " + (Math.floor(root.offset / root.pageSize) + 1) + " of " + Math.max(1, Math.ceil(root.total / root.pageSize))
+                    font.pixelSize: 30 * unit
+                }
+                TapButton {
+                    anchors { right: parent.right; rightMargin: 40 * unit }
+                    unit: root.unit
+                    label: "Next"
+                    enabled: root.offset + root.pageSize < root.total && !root.busy
+                    onTapped: root.loadList(root.offset + root.pageSize)
+                }
+            }
+        }
+
+        // ---- detail ----
+        Item {
+            visible: root.screen === "detail" && root.detail !== null
+            anchors.fill: parent
+
+            Column {
+                anchors { top: parent.top; topMargin: 36 * unit; left: parent.left; right: parent.right; margins: 40 * unit }
+                spacing: 20 * unit
+
+                Text {
+                    width: parent.width
+                    text: root.detail ? root.detail.name : ""
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 48 * unit
+                    font.bold: true
+                }
+                Text {
+                    width: parent.width
+                    text: !root.detail ? "" : root.detail.installed
+                        ? "Installed: " + root.detail.installedVersion + (root.detail.installedVersion !== root.detail.version ? "   ·   Catalogue: " + root.detail.version : "")
+                        : "Version " + root.detail.version
+                    font.pixelSize: 30 * unit
+                }
+                Text {
+                    width: parent.width
+                    text: root.detail ? root.detail.description : ""
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 34 * unit
+                }
+                Text {
+                    width: parent.width
+                    visible: text !== ""
+                    text: !root.detail ? "" : [
+                        root.detail.author ? "By " + root.detail.author : "",
+                        root.detail.license ? "Licence: " + root.detail.license : "",
+                        root.detail.category ? "Category: " + root.detail.category : ""
+                    ].filter(function (s) { return s !== "" }).join("   ·   ")
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 28 * unit
+                    color: "#444444"
+                }
+                Text {
+                    width: parent.width
+                    visible: root.detail !== null && (root.detail.depends || []).length > 0
+                    text: root.detail && root.detail.depends ? "Needs: " + root.detail.depends.join(", ") : ""
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 28 * unit
+                    color: "#444444"
+                }
+                Text {
+                    width: parent.width
+                    visible: root.detail !== null && !root.detail.compatible && !root.detail.installed
+                    text: root.detail && root.detail.incompatibleReason ? "Cannot be installed here: " + root.detail.incompatibleReason : "Cannot be installed on this tablet or OS version."
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 30 * unit
+                    font.bold: true
+                }
+            }
+
+            Item {
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom; bottomMargin: 36 * unit }
+                height: 96 * unit
+                TapButton {
+                    anchors { left: parent.left; leftMargin: 40 * unit }
+                    unit: root.unit
+                    label: "Back"
+                    onTapped: root.screen = "list"
+                }
+                TapButton {
+                    anchors { right: parent.right; rightMargin: 40 * unit }
+                    unit: root.unit
+                    visible: root.detail !== null && !root.detail.installed
+                    label: root.busy ? "Checking…" : "Install…"
+                    inverted: true
+                    enabled: root.detail !== null && root.detail.compatible && !root.busy
+                    onTapped: root.openPlan(root.detail.name)
+                }
+            }
+        }
+
+        // ---- plan ----
+        Item {
+            visible: root.screen === "plan" && root.plan !== null
+            anchors.fill: parent
+
+            readonly property bool blocked: root.plan !== null && !!root.plan.error
+            readonly property bool nothing: root.plan !== null && !root.plan.error && root.plan.packages.length === 0
+
+            Column {
+                anchors { top: parent.top; topMargin: 36 * unit; left: parent.left; right: parent.right; margins: 40 * unit }
+                spacing: 24 * unit
+
+                Text {
+                    width: parent.width
+                    text: !root.plan ? "" : parent.parent.blocked ? "Cannot install " + root.plan.requested.join(", ")
+                        : parent.parent.nothing ? "Nothing to do"
+                        : "Install " + root.plan.requested.join(", ") + "?"
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 44 * unit
+                    font.bold: true
+                }
+                Text {
+                    width: parent.width
+                    visible: parent.parent.blocked
+                    text: root.plan && root.plan.error ? root.plan.error : ""
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 24
+                    elide: Text.ElideRight
+                    font.pixelSize: 28 * unit
+                    font.family: "monospace"
+                }
+                Text {
+                    width: parent.width
+                    visible: parent.parent.nothing
+                    text: "Everything this needs is already installed."
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 34 * unit
+                }
+                Text {
+                    width: parent.width
+                    visible: !parent.parent.blocked && !parent.parent.nothing
+                    text: !root.plan ? "" : "This will install or change " + root.plan.packages.length + (root.plan.packages.length === 1 ? " package:" : " packages:")
+                    font.pixelSize: 32 * unit
+                }
+                Text {
+                    width: parent.width
+                    visible: !parent.parent.blocked && !parent.parent.nothing
+                    text: !root.plan ? "" : root.plan.packages.map(function (name) {
+                        var change = root.plan.upgrades ? root.plan.upgrades[name] : undefined
+                        return "•  " + name + (change ? "   (" + change + ")" : "")
+                    }).join("\n")
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 20
+                    elide: Text.ElideRight
+                    lineHeight: 1.25
+                    font.pixelSize: 32 * unit
+                }
+                Text {
+                    width: parent.width
+                    visible: !parent.parent.blocked && !parent.parent.nothing
+                    text: "The tablet needs Wi-Fi for the download. Steps that restart the reMarkable screen, such as rebuilding the hashtable, are not run by this app yet; it will tell you if one is left to do."
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 28 * unit
+                    color: "#444444"
+                }
+            }
+
+            Item {
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom; bottomMargin: 36 * unit }
+                height: 96 * unit
+                TapButton {
+                    anchors { left: parent.left; leftMargin: 40 * unit }
+                    unit: root.unit
+                    label: parent.parent.blocked || parent.parent.nothing ? "Back" : "Cancel"
+                    onTapped: root.screen = "detail"
+                }
+                TapButton {
+                    anchors { right: parent.right; rightMargin: 40 * unit }
+                    unit: root.unit
+                    visible: !parent.parent.blocked && !parent.parent.nothing
+                    label: "Install"
+                    inverted: true
+                    onTapped: root.startInstall()
+                }
+            }
+        }
+
+        // ---- progress ----
+        Item {
+            visible: root.screen === "progress"
+            anchors.fill: parent
+
+            readonly property bool done: root.jobResult !== null
+            readonly property bool failed: done && !root.jobResult.success
+
+            Column {
+                anchors { top: parent.top; topMargin: 36 * unit; left: parent.left; right: parent.right; margins: 40 * unit }
+                spacing: 24 * unit
+
+                Text {
+                    width: parent.width
+                    text: !parent.parent.done ? "Installing " + root.jobPackages.join(", ")
+                        : parent.parent.failed ? "Install failed" : "Installed " + root.jobPackages.join(", ")
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 44 * unit
+                    font.bold: true
+                }
+                Text {
+                    width: parent.width
+                    visible: !parent.parent.done
+                    text: (root.jobTotal > 0 ? "Step " + root.jobIndex + " of " + root.jobTotal + "\n" : "") + root.jobMessage
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 6
+                    elide: Text.ElideRight
+                    font.pixelSize: 32 * unit
+                }
+                Text {
+                    width: parent.width
+                    visible: !parent.parent.done
+                    text: "You can close this screen. The install carries on, and this page shows where it got to when you come back."
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 28 * unit
+                    color: "#444444"
+                }
+                Text {
+                    width: parent.width
+                    visible: parent.parent.failed
+                    text: root.jobResult && root.jobResult.errors ? root.jobResult.errors.join("\n\n") : ""
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 20
+                    elide: Text.ElideRight
+                    font.pixelSize: 30 * unit
+                }
+                Text {
+                    width: parent.width
+                    visible: parent.parent.done && root.jobResult.deferred !== undefined && root.jobResult.deferred.length > 0
+                    text: root.jobResult && root.jobResult.deferred ? "Left for you to do from a computer:\n" + root.jobResult.deferred.map(function (s) { return "•  " + s }).join("\n") : ""
+                    wrapMode: Text.Wrap
+                    lineHeight: 1.25
+                    font.pixelSize: 32 * unit
+                }
+                Text {
+                    width: parent.width
+                    visible: parent.parent.done && !parent.parent.failed
+                    text: "Some mods only show up after xovi is restarted."
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 28 * unit
+                    color: "#444444"
+                }
+            }
+
+            TapButton {
+                anchors { right: parent.right; rightMargin: 40 * unit; bottom: parent.bottom; bottomMargin: 36 * unit }
+                unit: root.unit
+                visible: parent.done
+                label: "Done"
+                inverted: true
+                onTapped: root.loadList(root.offset)
+            }
+        }
+    }
+}

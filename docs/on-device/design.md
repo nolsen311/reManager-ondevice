@@ -279,6 +279,21 @@ ondevice/manifest.json          AppLoad manifest
 - It refuses to run on a model other than the Move unless given
   `--allow-untested`.
 
+### Frontend as built
+
+- `ondevice/ui/Main.qml` has four screens: list (all or installed, nine per
+  page, with Previous and Next instead of scrolling), detail, plan and
+  progress. It is black on white with no animation, and every size is a
+  fraction of the width so it fits a window as well as the full screen.
+- It uses only `QtQuick` and AppLoad's endpoint, not Qt Quick Controls.
+- The frontend waits for a "ready" message (type 4) before its first
+  request, because AppLoad drops messages sent before the backend connects.
+- There is no search yet: it needs an on-screen keyboard.
+- Closing the app stops the backend. A running install is in its own worker
+  and carries on.
+- `ondevice/build.sh` builds the app folder (manifest, icon, `resources.rcc`,
+  `backend/entry`) into `ondevice/output/remanager`.
+
 ## 8. Milestone 1 and open questions
 
 Milestone 1, in order:
@@ -290,7 +305,9 @@ Milestone 1, in order:
    detection, `installed` and `plan` of an already-installed package work.
    Not yet run there: a plan that would install something, `install`, and
    the systemd worker.
-4. QML: package list, package detail, confirm, progress.
+4. QML: package list, package detail, confirm, progress. Written and
+   rendered on a PC against a mock backend (`ondevice/test/render.sh`). Not
+   yet loaded by AppLoad on the Move.
 5. First run on the Move, after the rehearsal in section 5.
 
 Open questions:
