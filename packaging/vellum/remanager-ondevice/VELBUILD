@@ -43,7 +43,10 @@ build() {
 	# go.mod names a newer Go than the image has; Go fetches it.
 	export GOTOOLCHAIN=auto
 	export GOPATH="$srcdir/go" GOCACHE="$srcdir/go-cache"
-	VERSION="$pkgver-r$pkgrel" RCC=/usr/lib/qt6/libexec/rcc ./ondevice/build.sh
+	# The app shows its version; the package release (-rN) only when it is a repackaging.
+	_version="$pkgver"
+	[ "$pkgrel" = 0 ] || _version="$pkgver-r$pkgrel"
+	VERSION="$_version" RCC=/usr/lib/qt6/libexec/rcc ./ondevice/build.sh
 }
 
 package() {
