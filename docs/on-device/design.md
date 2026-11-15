@@ -377,6 +377,17 @@ ondevice/manifest.json          AppLoad manifest
 - The icon (`ondevice/icon.svg`, rendered to `icon.png`) is the desktop
   icon without its background, black on transparent. AppLoad's Reload does
   not pick up a changed icon; restarting the reMarkable UI does.
+- Pipelines (2026-11-15): this repo no longer runs upstream's workflows,
+  which built, signed and published the desktop app and its guide. It has
+  one release pipeline, `.github/workflows/release.yml`: a tag `v<pkgver>`
+  builds the Vellum package with vbuild, signs it and the index with the
+  key in the `ONDEVICE_SIGNING_KEY` secret (checked against
+  `packaging/keys/remanager-ondevice.rsa.pub`), and publishes them with the
+  public key on GitHub Pages. `check.yml` runs the Go tests, the tablet
+  build and the screen renderer on every push. `upstream.yml` checks
+  upstream's latest release weekly against `.github/upstream-release`
+  (v2.0.1 when this was set up) and opens an issue, or fails if issues are
+  off. Nothing from upstream is merged automatically.
 - Packaging: `packaging/vellum/remanager-ondevice/VELBUILD` builds the app
   from a tagged source archive in Vellum's `ghcr.io/toltec-dev/golang:v4.0`
   image, installing Qt's `rcc` from Debian and letting Go fetch the version

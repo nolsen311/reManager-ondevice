@@ -1,0 +1,48 @@
+# Watches the desktop app this repo was forked from for new releases, so fixes
+# to the Go packages both share can be considered. Nothing is merged
+# automatically. After reviewing a release, put its tag in
+# .github/upstream-release.
+name: Upstream releases
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare upstream's latest release with the last one reviewed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM: rmitchellscott/reManager
+        run: |
+          reviewed=$(tr -d '[:space:]' < .github/upstream-release)
+          latest=$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)
+          echo "Reviewed: $reviewed. Latest: $latest."
+          if [ "$latest" = "$reviewed" ]; then
+            exit 0
+          fi
+          title="Upstream released $latest"
+          body="$UPSTREAM released $latest: https://github.com/$UPSTREAM/releases/tag/$latest
+
+          Changes since $reviewed: https://github.com/$UPSTREAM/compare/$reviewed...$latest
+
+          Look for fixes in the packages this app shares: internal/vellum, internal/installer, internal/executor, internal/component, internal/commands. After reviewing, put $latest in .github/upstream-release."
+          echo "$body" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .has_issues)" = true ]; then
+            if [ -z "$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "\"$title\" in:title" --json number --jq '.[0].number')" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+            fi
+          else
+            # Issues are off, so a failed run, which GitHub emails about, is the notice.
+            echo "::error::$title. Issues are turned off on this repository, so this failed run is the notice."
+            exit 1
+          fi

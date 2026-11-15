@@ -1,984 +1,163 @@
-name: Build
+# The release pipeline. Builds the on-tablet app as a Vellum (apk) package and
+# publishes it, with a signed index and the public key, as a package
+# repository on GitHub Pages. A tag v<version> matching pkgver in the package
+# definition builds, signs and publishes. A manual run builds with a
+# throwaway key and publishes nothing, to test a branch.
+name: Release
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      platforms:
-        description: 'Comma list of platforms to build: macos, windows, linux, ios, android'
-        required: true
-        type: string
-      notes:
-        description: 'Release notes as JSON: {"main": <markdown>, "flathub": <flathub notes>}'
-        required: true
-        type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  KEY_NAME: remanager-ondevice
+  PKG_DIR: packaging/vellum/remanager-ondevice
+  ARCH: aarch64
+  VBUILD_URL: https://github.com/Eeems/vbuild/releases/download/0.0.36/vbuild-x86_64-glibc
+  BUILDER_IMAGE: ghcr.io/eeems/vbuild-builder:main
 
 jobs:
-  version:
-    runs-on: ubuntu-24.04
-    outputs:
-      tag: ${{ steps.inputs.outputs.TAG }}
-      version: ${{ steps.inputs.outputs.VERSION }}
-      msix-version: ${{ steps.inputs.outputs.MSIX_VERSION }}
-      platforms: ${{ steps.inputs.outputs.PLATFORMS }}
-      desktop: ${{ steps.inputs.outputs.DESKTOP }}
-      android-version-code: ${{ steps.build-numbers.outputs.ANDROID_VERSION_CODE }}
+  build:
+    runs-on: ubuntu-latest
     steps:
-      - name: Read inputs
-        id: inputs
-        env:
-          PLATFORMS: ${{ inputs.platforms }}
-          NOTES: ${{ inputs.notes }}
-        run: |
-          echo "TAG=$GITHUB_REF_NAME" >> $GITHUB_OUTPUT
-
-          VERSION=${GITHUB_REF_NAME#v}
-          VERSION=${VERSION%%-*}
-          # Bundle and Store packages take numeric versions only, so a test tag builds under its plain version.
-          if [[ $GITHUB_REF_TYPE == tag && $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-            echo "MSIX_VERSION=$VERSION.0" >> $GITHUB_OUTPUT
-          else
-            echo "VERSION=0.0.0" >> $GITHUB_OUTPUT
-            echo "MSIX_VERSION=0.0.0.0" >> $GITHUB_OUTPUT
-          fi
-
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            jq -e '(.main | type == "string") and (.flathub | type == "string")' <<< "$NOTES" > /dev/null
-          else
-            PLATFORMS=macos,windows,linux
-          fi
-          PLATFORMS_JSON=$(jq -cn --arg p "$PLATFORMS" '$p | split(",") | map(gsub("\\s"; "")) | map(select(. != ""))')
-          echo "PLATFORMS=$PLATFORMS_JSON" >> $GITHUB_OUTPUT
-          echo "DESKTOP=$(jq -c 'any(.[]; IN("macos", "windows", "linux"))' <<< "$PLATFORMS_JSON")" >> $GITHUB_OUTPUT
-
       - uses: actions/checkout@v4
+
+      - name: Install vbuild
+        run: |
+          curl --fail --location "$VBUILD_URL" --output /usr/local/bin/vbuild
+          chmod +x /usr/local/bin/vbuild
+
+      - name: Read the version
+        id: version
+        run: |
+          pkgver=$(sed -n 's/^pkgver=//p' "$PKG_DIR/VELBUILD")
+          pkgrel=$(sed -n 's/^pkgrel=//p' "$PKG_DIR/VELBUILD")
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$pkgver" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match pkgver $pkgver in $PKG_DIR/VELBUILD"
+            exit 1
+          fi
+          echo "pkgver=$pkgver" >> "$GITHUB_OUTPUT"
+          echo "pkgrel=$pkgrel" >> "$GITHUB_OUTPUT"
+
+      - name: Set up the signing key
+        env:
+          SIGNING_KEY: ${{ secrets.ONDEVICE_SIGNING_KEY }}
+        run: |
+          keys="$HOME/.config/vbuild"
+          mkdir -p "$keys"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ -z "$SIGNING_KEY" ]; then
+              echo "::error::The ONDEVICE_SIGNING_KEY secret is not set"
+              exit 1
+            fi
+            printf '%s\n' "$SIGNING_KEY" > "$keys/$KEY_NAME.rsa"
+            chmod 600 "$keys/$KEY_NAME.rsa"
+            cp "packaging/keys/$KEY_NAME.rsa.pub" "$keys/$KEY_NAME.rsa.pub"
+            # Tablets trust the committed public key, so the secret must be its other half.
+            if ! openssl rsa -in "$keys/$KEY_NAME.rsa" -pubout 2>/dev/null | cmp -s - "$keys/$KEY_NAME.rsa.pub"; then
+              echo "::error::ONDEVICE_SIGNING_KEY does not match packaging/keys/$KEY_NAME.rsa.pub"
+              exit 1
+            fi
+          else
+            openssl genrsa -out "$keys/$KEY_NAME.rsa" 4096 2>/dev/null
+            openssl rsa -in "$keys/$KEY_NAME.rsa" -pubout -out "$keys/$KEY_NAME.rsa.pub" 2>/dev/null
+            echo "::notice::Manual run: signed with a throwaway key, nothing is published"
+          fi
+
+      - name: Prepare the build directory
+        env:
+          PKGVER: ${{ steps.version.outputs.pkgver }}
+        run: |
+          work="$RUNNER_TEMP/build"
+          mkdir -p "$work"
+          # Built from this checkout rather than the tag's download, so a manual run can test any branch.
+          # GitHub names the folder in a tag's archive after the tag without its "v"; this matches it.
+          git archive --prefix="reManager-ondevice-$PKGVER/" \
+            -o "$work/remanager-ondevice-$PKGVER.tar.gz" HEAD
+          sed -e 's|^source=.*|source="$pkgname-$pkgver.tar.gz"|' -e '/^sha512sums=/,$d' \
+            "$PKG_DIR/VELBUILD" > "$work/VELBUILD"
+          (cd "$work" && printf "sha512sums='%s\n%s'\n" \
+            "$(sha512sum "remanager-ondevice-$PKGVER.tar.gz" | cut -d' ' -f1)" \
+            "remanager-ondevice-$PKGVER.tar.gz") >> "$work/VELBUILD"
+          echo "WORK=$work" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) VBUILD_KEY_NAME="$KEY_NAME" CARCH="$ARCH" \
+            vbuild -C "$WORK" all
+          ls -la "$WORK/dist/$ARCH/"
+
+      - name: Verify the signature and build the signed index
+        run: |
+          site="$RUNNER_TEMP/site"
+          mkdir -p "$site/$ARCH"
+          cp "$WORK/dist/$ARCH/"*.apk "$site/$ARCH/"
+          docker run --rm \
+            -v "$site/$ARCH:/packages" \
+            -v "$HOME/.config/vbuild:/keys:ro" \
+            -w /packages \
+            "$BUILDER_IMAGE" \
+            sh -c "
+              set -e
+              cp /keys/$KEY_NAME.rsa.pub /etc/apk/keys/
+              for apk in *.apk; do apk verify \"\$apk\"; done
+              apk index --rewrite-arch $ARCH -o APKINDEX.tar.gz *.apk
+              abuild-sign -k /keys/$KEY_NAME.rsa APKINDEX.tar.gz
+              apk verify APKINDEX.tar.gz
+              chown -R $(id -u):$(id -g) /packages
+            "
+          echo "SITE=$site" >> "$GITHUB_ENV"
+
+      - name: Add the public key and instructions to the site
+        env:
+          PKGVER: ${{ steps.version.outputs.pkgver }}
+          PKGREL: ${{ steps.version.outputs.pkgrel }}
+        run: |
+          cp "$HOME/.config/vbuild/$KEY_NAME.rsa.pub" "$SITE/"
+          fingerprint=$(openssl rsa -pubin -in "$SITE/$KEY_NAME.rsa.pub" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
+          base="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}"
+          cat > "$SITE/index.html" <<HTML
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>reManager on-device packages</title>
+          <h1>reManager on-device packages</h1>
+          <p>An apk package repository for Vellum, holding remanager-ondevice $PKGVER-r$PKGREL for $ARCH.</p>
+          <p>Repository: <code>$base</code></p>
+          <p>Signing key: <a href="$KEY_NAME.rsa.pub">$KEY_NAME.rsa.pub</a>, SHA-256 of its DER form: <code>$fingerprint</code></p>
+          <p>Source: <a href="https://github.com/$GITHUB_REPOSITORY">github.com/$GITHUB_REPOSITORY</a>, see ondevice/README.md.</p>
+          HTML
+          sed -i 's/^          //' "$SITE/index.html"
+          echo "Key fingerprint: $fingerprint" >> "$GITHUB_STEP_SUMMARY"
+          find "$SITE" -type f | sort >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remanager-ondevice-${{ steps.version.outputs.pkgver }}-r${{ steps.version.outputs.pkgrel }}
+          path: ${{ env.SITE }}
+
+      - uses: actions/upload-pages-artifact@v3
         if: github.ref_type == 'tag'
+        with:
+          path: ${{ env.SITE }}
 
-      # The iOS and Mac App Store tasks read the version from build/config.yml, not the tag.
-      - name: Check the configured version
-        if: github.ref_type == 'tag'
-        env:
-          VERSION: ${{ steps.inputs.outputs.VERSION }}
-        run: |
-          MISMATCHED=$(grep -nE '^  version: ' build/config.yml | grep -v "\"$VERSION\"" || true)
-          if [ -n "$MISMATCHED" ]; then
-            echo "::error::build/config.yml does not carry version $VERSION: $MISMATCHED"
-            exit 1
-          fi
-
-      # Each version owns a block of 99 codes, major*1_000_000 + minor*10_000 + patch*100 plus an upload counter, so the next code is one past the highest bundle Play already has in the block.
-      - name: Look up build numbers
-        id: build-numbers
-        if: contains(fromJSON(steps.inputs.outputs.PLATFORMS), 'android')
-        env:
-          VERSION: ${{ steps.inputs.outputs.VERSION }}
-          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-        run: |
-          base64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-          NOW=$(date +%s)
-          HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | base64url)
-          CLAIMS=$(jq -cn --arg iss "$(jq -r .client_email <<< "$PLAY_SERVICE_ACCOUNT_JSON")" --argjson now "$NOW" \
-            '{iss: $iss, scope: "https://www.googleapis.com/auth/androidpublisher", aud: "https://oauth2.googleapis.com/token", iat: $now, exp: ($now + 600)}' | base64url)
-          SIGNATURE=$(printf '%s.%s' "$HEADER" "$CLAIMS" | openssl dgst -sha256 -sign <(jq -r .private_key <<< "$PLAY_SERVICE_ACCOUNT_JSON") | base64url)
-          TOKEN=$(curl -sf https://oauth2.googleapis.com/token \
-            -d grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer \
-            -d assertion="$HEADER.$CLAIMS.$SIGNATURE" | jq -r .access_token)
-
-          API=https://androidpublisher.googleapis.com/androidpublisher/v3/applications/io.scottlabs.reManager
-          EDIT=$(curl -sf -X POST -H "Authorization: Bearer $TOKEN" "$API/edits" | jq -r .id)
-          CODES=$(curl -sf -H "Authorization: Bearer $TOKEN" "$API/edits/$EDIT/bundles" | jq '[.bundles[]?.versionCode]')
-          curl -sf -X DELETE -H "Authorization: Bearer $TOKEN" "$API/edits/$EDIT"
-
-          IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
-          BASE=$((MAJOR * 1000000 + MINOR * 10000 + PATCH * 100))
-          HIGHEST=$(jq --argjson base "$BASE" '[.[] | select(. > $base and . < $base + 100)] | max // $base' <<< "$CODES")
-          if [ $((HIGHEST - BASE)) -ge 99 ]; then
-            echo "::error::Play already has 99 builds of $VERSION"
-            exit 1
-          fi
-          echo "ANDROID_VERSION_CODE=$((HIGHEST + 1))" >> $GITHUB_OUTPUT
-
-  build-macos:
-    needs: [version]
-    if: contains(fromJSON(needs.version.outputs.platforms), 'macos')
-    runs-on: macos-latest
+  publish:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Prepare the Wails fork
-        run: ./scripts/prepare-wails-fork.sh
-
-      - name: Install Wails
-        working-directory: third_party/wails-v3
-        run: go install ./cmd/wails3
-
-      - name: Build universal app
-        run: >-
-          wails3 task darwin:package:universal
-          "EXTRA_LDFLAGS=-X main.version=${{ needs.version.outputs.tag }} -X reManager/internal/support.supportURL=${{ secrets.REMANAGER_SUPPORT_URL }}"
-
-      - name: Set bundle version
-        run: |
-          PLIST=bin/reManager.app/Contents/Info.plist
-          /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString ${{ needs.version.outputs.version }}' "$PLIST"
-          /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion ${{ needs.version.outputs.version }}' "$PLIST"
-
-      - name: Import certificate
-        uses: apple-actions/import-codesign-certs@v3
-        with:
-          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-
-      - name: Embed provisioning profile
-        run: echo -n "${{ secrets.APPLE_DEVELOPER_ID_PROFILE_BASE64 }}" | base64 --decode -o bin/reManager.app/Contents/embedded.provisionprofile
-
-      - name: Code sign
-        run: |
-          codesign --deep --force --verify --verbose \
-            --sign "Developer ID Application: Robert Scott (${{ secrets.APPLE_TEAM_ID }})" \
-            --options runtime \
-            --entitlements build/darwin/entitlements.icloud.plist \
-            bin/reManager.app
-
-      - name: Create ZIP for notarization
-        run: |
-          cd bin
-          ditto -c -k --keepParent reManager.app reManager-macos-universal.zip
-
-      - name: Store API key
-        if: github.event_name == 'workflow_dispatch' && !endsWith(github.ref_name, '-test')
-        run: |
-          mkdir -p ~/private_keys
-          echo -n "${{ secrets.APPLE_API_KEY_BASE64 }}" | base64 --decode -o ~/private_keys/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8
-
-      - name: Notarize
-        if: github.event_name == 'workflow_dispatch' && !endsWith(github.ref_name, '-test')
-        run: |
-          xcrun notarytool submit bin/reManager-macos-universal.zip \
-            --key ~/private_keys/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8 \
-            --key-id ${{ secrets.APPLE_API_KEY_ID }} \
-            --issuer ${{ secrets.APPLE_API_ISSUER_ID }} \
-            --wait \
-            --timeout 2h
-
-      - name: Staple
-        if: github.event_name == 'workflow_dispatch' && !endsWith(github.ref_name, '-test')
-        run: xcrun stapler staple bin/reManager.app
-
-      - name: Re-create ZIP with stapled app
-        if: github.event_name == 'workflow_dispatch' && !endsWith(github.ref_name, '-test')
-        run: |
-          cd bin
-          rm reManager-macos-universal.zip
-          ditto -c -k --keepParent reManager.app reManager-macos-universal.zip
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: reManager-macos-universal
-          path: bin/reManager-macos-universal.zip
-
-  build-linux-amd64:
-    needs: [version]
-    if: contains(fromJSON(needs.version.outputs.platforms), 'linux')
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev
-
-      - name: Prepare the Wails fork
-        run: ./scripts/prepare-wails-fork.sh
-
-      - name: Install Wails
-        working-directory: third_party/wails-v3
-        run: go install ./cmd/wails3
-
-      - name: Build
-        run: >-
-          wails3 task linux:build
-          "EXTRA_LDFLAGS=-X main.version=${{ needs.version.outputs.tag }} -X reManager/internal/support.supportURL=${{ secrets.REMANAGER_SUPPORT_URL }}"
-
-      - name: Compress
-        run: |
-          cd bin
-          tar -czvf reManager-linux-amd64.tar.gz reManager
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: reManager-linux-amd64
-          path: bin/reManager-linux-amd64.tar.gz
-
-  build-linux-arm64:
-    needs: [version]
-    if: contains(fromJSON(needs.version.outputs.platforms), 'linux')
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev
-
-      - name: Prepare the Wails fork
-        run: ./scripts/prepare-wails-fork.sh
-
-      - name: Install Wails
-        working-directory: third_party/wails-v3
-        run: go install ./cmd/wails3
-
-      - name: Build
-        run: >-
-          wails3 task linux:build
-          "EXTRA_LDFLAGS=-X main.version=${{ needs.version.outputs.tag }} -X reManager/internal/support.supportURL=${{ secrets.REMANAGER_SUPPORT_URL }}"
-
-      - name: Compress
-        run: |
-          cd bin
-          tar -czvf reManager-linux-arm64.tar.gz reManager
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: reManager-linux-arm64
-          path: bin/reManager-linux-arm64.tar.gz
-
-  build-windows-amd64:
-    needs: [version]
-    if: contains(fromJSON(needs.version.outputs.platforms), 'windows')
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Prepare the Wails fork
-        shell: bash
-        run: ./scripts/prepare-wails-fork.sh
-
-      - name: Install Wails
-        working-directory: third_party/wails-v3
-        run: go install ./cmd/wails3
-
-      - name: Build
-        run: >-
-          wails3 task windows:build ARCH=amd64
-          "EXTRA_LDFLAGS=-X main.version=${{ needs.version.outputs.tag }} -X reManager/internal/support.supportURL=${{ secrets.REMANAGER_SUPPORT_URL }}"
-
-      - name: Compress
-        run: Compress-Archive -Path bin\reManager.exe -DestinationPath bin\reManager-windows-amd64.zip
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: reManager-windows-amd64
-          path: bin/reManager-windows-amd64.zip
-
-  build-windows-arm64:
-    needs: [version]
-    if: contains(fromJSON(needs.version.outputs.platforms), 'windows')
-    runs-on: windows-11-arm
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Prepare the Wails fork
-        shell: bash
-        run: ./scripts/prepare-wails-fork.sh
-
-      - name: Install Wails
-        working-directory: third_party/wails-v3
-        run: go install ./cmd/wails3
-
-      - name: Build
-        run: >-
-          wails3 task windows:build ARCH=arm64
-          "EXTRA_LDFLAGS=-X main.version=${{ needs.version.outputs.tag }} -X reManager/internal/support.supportURL=${{ secrets.REMANAGER_SUPPORT_URL }}"
-
-      - name: Compress
-        run: Compress-Archive -Path bin\reManager.exe -DestinationPath bin\reManager-windows-arm64.zip
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: reManager-windows-arm64
-          path: bin/reManager-windows-arm64.zip
-
-  build-windows-msix:
-    needs: [version]
-    if: contains(fromJSON(needs.version.outputs.platforms), 'windows')
-    strategy:
-      matrix:
-        include:
-          - arch: amd64
-            runs-on: windows-latest
-          - arch: arm64
-            runs-on: windows-11-arm
-    runs-on: ${{ matrix.runs-on }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Prepare the Wails fork
-        shell: bash
-        run: ./scripts/prepare-wails-fork.sh
-
-      - name: Install Wails
-        working-directory: third_party/wails-v3
-        run: go install ./cmd/wails3
-
-      - name: Package MSIX
-        run: >-
-          wails3 task windows:package FORMAT=msix
-          ARCH=${{ matrix.arch }}
-          VERSION=${{ needs.version.outputs.msix-version }}
-          EXTRA_TAGS=msstore
-          "EXTRA_LDFLAGS=-X main.version=${{ needs.version.outputs.tag }} -X reManager/internal/support.supportURL=${{ secrets.REMANAGER_SUPPORT_URL }}"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: reManager-msix-${{ matrix.arch }}
-          path: bin/*.msix
-
-  build-flatpak-x86_64:
-    needs: [version]
-    if: contains(fromJSON(needs.version.outputs.platforms), 'linux')
-    runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
-      options: --privileged
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set support URL and version
-        env:
-          SUPPORT_URL: ${{ secrets.REMANAGER_SUPPORT_URL }}
-          VERSION: ${{ needs.version.outputs.version }}
-          TAG: ${{ needs.version.outputs.tag }}
-        run: |
-          if [ "$VERSION" = 0.0.0 ]; then APP_VERSION=$TAG; else APP_VERSION=v$VERSION; fi
-          sed -i "s|-X main.version=\$(git describe --tags --always)|-X reManager/internal/support.supportURL=$SUPPORT_URL -X main.version=$APP_VERSION|" flatpak/io.scottlabs.reManager.yml
-          grep -q 'support.supportURL=' flatpak/io.scottlabs.reManager.yml
-
-      - name: Build Flatpak
-        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
-        with:
-          bundle: reManager.flatpak
-          manifest-path: flatpak/io.scottlabs.reManager.yml
-          arch: x86_64
-          cache-key: flatpak-builder-x86_64-${{ github.sha }}
-
-  build-flatpak-aarch64:
-    needs: [version]
-    if: contains(fromJSON(needs.version.outputs.platforms), 'linux')
-    runs-on: ubuntu-24.04-arm
-    container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
-      options: --privileged
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set support URL and version
-        env:
-          SUPPORT_URL: ${{ secrets.REMANAGER_SUPPORT_URL }}
-          VERSION: ${{ needs.version.outputs.version }}
-          TAG: ${{ needs.version.outputs.tag }}
-        run: |
-          if [ "$VERSION" = 0.0.0 ]; then APP_VERSION=$TAG; else APP_VERSION=v$VERSION; fi
-          sed -i "s|-X main.version=\$(git describe --tags --always)|-X reManager/internal/support.supportURL=$SUPPORT_URL -X main.version=$APP_VERSION|" flatpak/io.scottlabs.reManager.yml
-          grep -q 'support.supportURL=' flatpak/io.scottlabs.reManager.yml
-
-      - name: Build Flatpak
-        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
-        with:
-          bundle: reManager.flatpak
-          manifest-path: flatpak/io.scottlabs.reManager.yml
-          arch: aarch64
-          cache-key: flatpak-builder-aarch64-${{ github.sha }}
-
-  build-android:
-    needs: [version]
-    if: contains(fromJSON(needs.version.outputs.platforms), 'android')
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev
-
-      - name: Install NDK
-        run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.3.11579264" > /dev/null
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> $GITHUB_ENV
-
-      - name: Prepare the Wails fork
-        run: ./scripts/prepare-wails-fork.sh
-
-      - name: Install Wails
-        working-directory: third_party/wails-v3
-        run: go install ./cmd/wails3
-
-      - name: Build bundle
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/upload.jks
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
-        run: |
-          base64 --decode <<< "$KEYSTORE_BASE64" > "$ANDROID_KEYSTORE_FILE"
-          wails3 task android:bundle:fat \
-            APP_VERSION=${{ needs.version.outputs.version }} \
-            APP_VERSION_CODE=${{ needs.version.outputs.android-version-code }} \
-            "EXTRA_LDFLAGS=-X reManager/internal/support.supportURL=${{ secrets.REMANAGER_SUPPORT_URL }}"
-
-      - name: Build sideload APK
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_SIDELOAD_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/sideload.jks
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_SIDELOAD_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_SIDELOAD_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_SIDELOAD_KEY_PASSWORD }}
-        run: |
-          base64 --decode <<< "$KEYSTORE_BASE64" > "$ANDROID_KEYSTORE_FILE"
-          wails3 task android:package:sideload \
-            APP_VERSION=${{ needs.version.outputs.version }} \
-            APP_VERSION_CODE=${{ needs.version.outputs.android-version-code }} \
-            "EXTRA_LDFLAGS=-X reManager/internal/support.supportURL=${{ secrets.REMANAGER_SUPPORT_URL }}"
-          mv bin/reManager.apk bin/reManager-android.apk
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: reManager-android
-          path: |
-            bin/reManager.aab
-            bin/reManager-android.apk
-
-  build-ios:
-    needs: [version]
-    if: contains(fromJSON(needs.version.outputs.platforms), 'ios')
-    runs-on: xcode-27
-    outputs:
-      build-number: ${{ steps.profile.outputs.BUILD_NUMBER }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Install icon tools
-        run: brew install imagemagick librsvg
-
-      - name: Prepare the Wails fork
-        run: ./scripts/prepare-wails-fork.sh
-
-      - name: Install Wails
-        working-directory: third_party/wails-v3
-        run: go install ./cmd/wails3
-
-      - name: Import certificate
-        uses: apple-actions/import-codesign-certs@v3
-        with:
-          p12-file-base64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
-          p12-password: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
-
-      - name: Install provisioning profile
-        id: profile
-        env:
-          PROFILE_BASE64: ${{ secrets.APPLE_IOS_APPSTORE_PROFILE_BASE64 }}
-        run: |
-          PROFILE=$RUNNER_TEMP/appstore.mobileprovision
-          base64 --decode -o "$PROFILE" <<< "$PROFILE_BASE64"
-          security cms -D -i "$PROFILE" > "$RUNNER_TEMP/profile.plist"
-          UUID=$(plutil -extract UUID raw "$RUNNER_TEMP/profile.plist")
-          for dir in "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
-            mkdir -p "$dir"
-            cp "$PROFILE" "$dir/$UUID.mobileprovision"
-          done
-          echo "NAME=$(plutil -extract Name raw "$RUNNER_TEMP/profile.plist")" >> $GITHUB_OUTPUT
-          echo "TEAM=$(plutil -extract TeamIdentifier.0 raw "$RUNNER_TEMP/profile.plist")" >> $GITHUB_OUTPUT
-          echo "BUILD_NUMBER=${{ github.run_number }}.${{ github.run_attempt }}" >> $GITHUB_OUTPUT
-
-      - name: Archive
-        run: >-
-          wails3 task ios:archive
-          BUILD_NUMBER=${{ steps.profile.outputs.BUILD_NUMBER }}
-          DEVELOPMENT_TEAM=${{ steps.profile.outputs.TEAM }}
-          CODE_SIGN_STYLE=Manual
-          "CODE_SIGN_IDENTITY=Apple Distribution"
-          "PROVISIONING_PROFILE_SPECIFIER=${{ steps.profile.outputs.NAME }}"
-          "EXTRA_LDFLAGS=-X reManager/internal/support.supportURL=${{ secrets.REMANAGER_SUPPORT_URL }}"
-
-      - name: Export
-        env:
-          PROFILE_NAME: ${{ steps.profile.outputs.NAME }}
-          TEAM: ${{ steps.profile.outputs.TEAM }}
-        run: |
-          cat > "$RUNNER_TEMP/export.plist" <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key><string>app-store-connect</string>
-            <key>destination</key><string>export</string>
-            <key>signingStyle</key><string>manual</string>
-            <key>teamID</key><string>$TEAM</string>
-            <key>signingCertificate</key><string>Apple Distribution</string>
-            <key>provisioningProfiles</key>
-            <dict><key>io.scottlabs.reManager</key><string>$PROFILE_NAME</string></dict>
-            <key>manageAppVersionAndBuildNumber</key><false/>
-            <key>uploadSymbols</key><false/>
-          </dict>
-          </plist>
-          EOF
-          xcodebuild -exportArchive \
-            -archivePath bin/reManager.xcarchive \
-            -exportOptionsPlist "$RUNNER_TEMP/export.plist" \
-            -exportPath bin/export
-          mv bin/export/*.ipa bin/reManager.ipa
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: reManager-ios
-          path: bin/reManager.ipa
-
-  build-mas:
-    needs: [version]
-    if: contains(fromJSON(needs.version.outputs.platforms), 'macos')
-    runs-on: macos-latest
-    outputs:
-      build-number: ${{ steps.build-number.outputs.BUILD_NUMBER }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Prepare the Wails fork
-        run: ./scripts/prepare-wails-fork.sh
-
-      - name: Install Wails
-        working-directory: third_party/wails-v3
-        run: go install ./cmd/wails3
-
-      - name: Import distribution certificate
-        id: distribution-certificate
-        uses: apple-actions/import-codesign-certs@v3
-        with:
-          p12-file-base64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
-          p12-password: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
-
-      - name: Import installer certificate
-        uses: apple-actions/import-codesign-certs@v3
-        with:
-          create-keychain: false
-          keychain-password: ${{ steps.distribution-certificate.outputs.keychain-password }}
-          p12-file-base64: ${{ secrets.APPLE_MAC_INSTALLER_CERTIFICATE_BASE64 }}
-          p12-password: ${{ secrets.APPLE_MAC_INSTALLER_CERTIFICATE_PASSWORD }}
-
-      - name: Write provisioning profile
-        env:
-          PROFILE_BASE64: ${{ secrets.APPLE_MAS_PROFILE_BASE64 }}
-        run: base64 --decode -o "$RUNNER_TEMP/mas.provisionprofile" <<< "$PROFILE_BASE64"
-
-      - name: Set build number
-        id: build-number
-        run: echo "BUILD_NUMBER=${{ github.run_number }}.${{ github.run_attempt }}" >> $GITHUB_OUTPUT
-
-      - name: Build installer package
-        run: >-
-          wails3 task darwin:mas
-          BUILD_NUMBER=${{ steps.build-number.outputs.BUILD_NUMBER }}
-          MAS_PROVISIONING_PROFILE=${{ runner.temp }}/mas.provisionprofile
-          "EXTRA_LDFLAGS=-X reManager/internal/support.supportURL=${{ secrets.REMANAGER_SUPPORT_URL }}"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: reManager-mas
-          path: bin/*.pkg
-
-  publish-desktop:
-    needs: [version, build-macos, build-linux-amd64, build-linux-arm64, build-windows-amd64, build-windows-arm64, build-flatpak-x86_64, build-flatpak-aarch64]
-    # The builds of platforms that were not dispatched are skipped, which a plain needs would carry into this job.
-    if: >-
-      !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
-      && github.event_name == 'workflow_dispatch' && github.ref_type == 'tag' && !endsWith(github.ref_name, '-test')
-      && needs.version.outputs.desktop == 'true'
-    runs-on: ubuntu-24.04
-    concurrency: github-release-${{ github.ref_name }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      TAG: ${{ github.ref_name }}
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create or update draft release
-        env:
-          NOTES: ${{ inputs.notes }}
-        run: |
-          jq -r .main <<< "$NOTES" > notes.md
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release edit "$TAG" --title "$TAG" --notes-file notes.md
-          else
-            gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file notes.md
-          fi
-
-      - name: Upload files
-        run: |
-          shopt -s nullglob
-          for dir in artifacts/reManager-*.flatpak; do
-            mv "$dir/reManager.flatpak" "$dir/$(basename "$dir")"
-          done
-          gh release upload "$TAG" --clobber \
-            artifacts/reManager-macos-*/*.zip \
-            artifacts/reManager-linux-*/*.tar.gz \
-            artifacts/reManager-windows-*/*.zip \
-            artifacts/reManager-*.flatpak/*.flatpak
-
-  publish-android:
-    needs: [version, build-android]
-    if: >-
-      !cancelled() && needs.build-android.result == 'success'
-      && github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
-    runs-on: ubuntu-24.04
-    concurrency: github-release-${{ github.ref_name }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      TAG: ${{ github.ref_name }}
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: reManager-android
-          path: artifacts
-
-      - name: Upload to internal track
-        uses: r0adkll/upload-google-play@v1
-        with:
-          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: io.scottlabs.reManager
-          releaseFiles: artifacts/reManager.aab
-          releaseName: ${{ needs.version.outputs.version }}
-          track: internal
-          status: completed
-
-      # No --latest flag: the releaser decides Latest when it publishes the draft, from whether the release carries desktop files.
-      - name: Attach APK to GitHub Release
-        if: ${{ !endsWith(github.ref_name, '-test') }}
-        env:
-          NOTES: ${{ inputs.notes }}
-        run: |
-          if ! gh release view "$TAG" > /dev/null 2>&1; then
-            jq -r .main <<< "$NOTES" > notes.md
-            gh release create "$TAG" --draft --verify-tag --title "$TAG (Android)" --notes-file notes.md
-          fi
-          gh release upload "$TAG" --clobber artifacts/reManager-android.apk
-
-  publish-ios:
-    needs: [version, build-ios]
-    if: >-
-      !cancelled() && needs.build-ios.result == 'success'
-      && github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
-    runs-on: macos-latest
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: reManager-ios
-          path: artifacts
-
-      - name: Store API key
-        run: |
-          mkdir -p ~/private_keys
-          echo -n "${{ secrets.APPLE_API_KEY_BASE64 }}" | base64 --decode -o ~/private_keys/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8
-
-      - name: Upload to App Store Connect
-        run: |
-          xcrun altool --upload-package artifacts/reManager.ipa --type ios \
-            --apple-id 6812167832 \
-            --bundle-id io.scottlabs.reManager \
-            --bundle-short-version-string ${{ needs.version.outputs.version }} \
-            --bundle-version ${{ needs.build-ios.outputs.build-number }} \
-            --apiKey ${{ secrets.APPLE_API_KEY_ID }} \
-            --apiIssuer ${{ secrets.APPLE_API_ISSUER_ID }}
-
-  publish-mas:
-    needs: [version, build-mas]
-    if: >-
-      !cancelled() && needs.build-mas.result == 'success'
-      && github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
-    runs-on: macos-latest
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: reManager-mas
-          path: artifacts
-
-      - name: Store API key
-        run: |
-          mkdir -p ~/private_keys
-          echo -n "${{ secrets.APPLE_API_KEY_BASE64 }}" | base64 --decode -o ~/private_keys/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8
-
-      - name: Upload to App Store Connect
-        run: |
-          xcrun altool --upload-package artifacts/*.pkg --type macos \
-            --apiKey ${{ secrets.APPLE_API_KEY_ID }} \
-            --apiIssuer ${{ secrets.APPLE_API_ISSUER_ID }}
-
-  # Leaves a draft submission for the releaser to commit: the packages replace those of the last submission, and a draft from an earlier run of this version is reused.
-  publish-msstore:
-    needs: [version, build-windows-msix]
-    if: >-
-      !cancelled() && needs.build-windows-msix.result == 'success'
-      && github.event_name == 'workflow_dispatch' && github.ref_type == 'tag'
-    runs-on: ubuntu-24.04
-    env:
-      API: https://manage.devcenter.microsoft.com/v1.0/my/applications/9NV10641JZDS
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: reManager-msix-*
-          path: artifacts
-
-      - name: Get an access token
-        env:
-          TENANT_ID: ${{ secrets.MSSTORE_TENANT_ID }}
-          CLIENT_ID: ${{ secrets.MSSTORE_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET }}
-        run: |
-          TOKEN=$(curl -sS --fail-with-body "https://login.microsoftonline.com/$TENANT_ID/oauth2/token" \
-            -d grant_type=client_credentials \
-            --data-urlencode "client_id=$CLIENT_ID" \
-            --data-urlencode "client_secret=$CLIENT_SECRET" \
-            -d resource=https://manage.devcenter.microsoft.com | jq -r .access_token)
-          echo "::add-mask::$TOKEN"
-          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
-
-      - name: Create or reuse the draft submission
-        run: |
-          PENDING=$(curl -sS --fail-with-body -H "Authorization: Bearer $TOKEN" "$API" | jq -r '.pendingApplicationSubmission.id // empty')
-          if [ -n "$PENDING" ]; then
-            curl -sS --fail-with-body -H "Authorization: Bearer $TOKEN" "$API/submissions/$PENDING" > submission.json
-          else
-            curl -sS --fail-with-body -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Length: 0' "$API/submissions" > submission.json
-          fi
-          STATUS=$(jq -r .status submission.json)
-          if [ "$STATUS" != PendingCommit ]; then
-            echo "::error::The pending submission is $STATUS, not PendingCommit"
-            exit 1
-          fi
-
-      - name: Replace the packages
-        run: |
-          mkdir upload
-          cp artifacts/reManager-msix-*/*.msix upload/
-          FILES=$(cd upload && ls *.msix | jq -R . | jq -sc .)
-          jq --argjson files "$FILES" '.applicationPackages = (
-            [.applicationPackages[] | select(.fileStatus != "PendingUpload") | .fileStatus = "PendingDelete"]
-            + ($files | map({fileName: ., fileStatus: "PendingUpload", minimumDirectXVersion: "None", minimumSystemRam: "None"}))
-          )' submission.json > updated.json
-          ID=$(jq -r .id updated.json)
-          curl -sS --fail-with-body -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-            --data @updated.json "$API/submissions/$ID" > /dev/null
-          (cd upload && zip -q ../packages.zip *.msix)
-          curl -sS --fail-with-body -X PUT -H 'x-ms-blob-type: BlockBlob' \
-            --upload-file packages.zip "$(jq -r .fileUploadUrl updated.json)"
-          echo "Draft submission $ID carries $(jq -r 'join(", ")' <<< "$FILES")"
-
-  update-flathub:
-    needs: [version, publish-desktop]
-    if: >-
-      !cancelled() && needs.publish-desktop.result == 'success'
-      && contains(fromJSON(needs.version.outputs.platforms), 'linux')
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install yq
-        run: |
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-
-      - name: Clone flathub repo
-        run: |
-          git clone https://x-access-token:${{ secrets.FLATHUB_PAT }}@github.com/flathub/io.scottlabs.reManager.git flathub-repo
-
-      - name: Update flathub files
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NOTES: ${{ inputs.notes }}
-          SUPPORT_URL: ${{ secrets.REMANAGER_SUPPORT_URL }}
-        run: |
-          TAG=${{ github.ref_name }}
-          COMMIT=${{ github.sha }}
-
-          cp flatpak/go-sources.yml flathub-repo/
-          cp flatpak/node-sources.json flathub-repo/
-          cp flatpak/vendor-modules.txt flathub-repo/
-
-          # node-sources.json and go-sources.yml stay plain strings, not type: file, so flatpak-builder expands them as additional sources.
-          yq eval '
-            .modules[0].sources |= [
-              {"type": "git", "url": "https://github.com/rmitchellscott/reManager.git", "tag": "'"$TAG"'", "commit": "'"$COMMIT"'"},
-              {"type": "file", "path": "io.scottlabs.reManager.metainfo.xml"}
-            ] + .[1:] |
-            .modules[0]."build-commands"[] |= sub("flatpak/io.scottlabs.reManager.metainfo.xml", "io.scottlabs.reManager.metainfo.xml") |
-            .modules[0]."build-commands"[] |= sub("-X main.version=", "-X reManager/internal/support.supportURL=" + strenv(SUPPORT_URL) + " -X main.version=")
-          ' flatpak/io.scottlabs.reManager.yml > flathub-repo/io.scottlabs.reManager.yml
-
-          RELEASES_JSON=$(gh api "repos/${{ github.repository }}/releases?per_page=50" | jq --arg tag "$TAG" '[.[] | select(.draft | not) | select(.tag_name != $tag) | select(any(.assets[]; .name | test("linux-|\\.flatpak$"))) | {
-            "+@version": (.tag_name | ltrimstr("v")),
-            "+@date": (.published_at | split("T")[0]),
-            "url": {
-              "+@type": "details",
-              "+content": ("https://github.com/rmitchellscott/reManager/releases/tag/" + .tag_name)
-            }
-          }]')
-
-          # This version's release is still a draft, so it is added here with the Flathub notes, whose markup yq cannot carry.
-          export FLATHUB_NOTES=$(jq -r .flathub <<< "$NOTES")
-          yq -p xml -o xml ".component.releases.release = $RELEASES_JSON" flatpak/io.scottlabs.reManager.metainfo.xml |
-            awk -v version="${TAG#v}" -v date="$(date -u +%F)" -v tag="$TAG" '
-              { print }
-              /<releases>/ && !added {
-                print "    <release version=\"" version "\" date=\"" date "\">"
-                print "      <url type=\"details\">https://github.com/rmitchellscott/reManager/releases/tag/" tag "</url>"
-                print "      <description>" ENVIRON["FLATHUB_NOTES"] "</description>"
-                print "    </release>"
-                added = 1
-              }
-            ' > flathub-repo/io.scottlabs.reManager.metainfo.xml
-
-      - name: Create PR on Flathub
-        env:
-          GH_TOKEN: ${{ secrets.FLATHUB_PAT }}
-        run: |
-          cd flathub-repo
-          TAG=${{ github.ref_name }}
-          BRANCH="update-$TAG"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git checkout -b "$BRANCH"
-          git add .
-          git commit -m "Update to $TAG" || exit 0
-          git push --force -u origin "$BRANCH"
-
-          if ! gh pr view "$BRANCH" > /dev/null 2>&1; then
-            gh pr create \
-              --title "Update to $TAG" \
-              --body "Automated update from upstream release $TAG" \
-              --base master \
-              --head "$BRANCH"
-          fi
+      - id: deploy
+        uses: actions/deploy-pages@v4

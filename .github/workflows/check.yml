@@ -1,42 +1,60 @@
+# Tests and builds the on-tablet app. The desktop app this repo was forked
+# from is not built here.
 name: Check
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: ['**']
+
+permissions:
+  contents: read
 
 jobs:
   check:
     runs-on: ubuntu-24.04
+    env:
+      PACKAGES: ./internal/executor ./internal/appload ./internal/ondevice ./internal/vellum ./internal/installer ./cmd/remanager-ondevice
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install GTK 4 and WebKitGTK 6
+      - name: Install Qt tools for the screens
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev
+          sudo apt-get install -y --no-install-recommends qt6-base-dev-tools qt6-declarative-dev-tools \
+            qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript qml6-module-qtqml qml-qt6
 
-      - name: Prepare the Wails fork
-        run: ./scripts/prepare-wails-fork.sh
+      - name: Format
+        run: |
+          unformatted=$(gofmt -l internal/executor internal/appload internal/ondevice cmd/remanager-ondevice)
+          if [ -n "$unformatted" ]; then echo "Run gofmt on: $unformatted"; exit 1; fi
 
-      - name: Install the Wails CLI from the fork
-        working-directory: third_party/wails-v3
-        run: go install ./cmd/wails3
+      - name: Vet
+        run: go vet $PACKAGES
 
-      - name: Install frontend dependencies
-        run: npm ci --prefix frontend
+      - name: Test
+        run: go test -race -count=1 $PACKAGES
 
-      - name: Check
-        run: wails3 task check
+      - name: Build the app folder for the tablet
+        run: VERSION="check-${GITHUB_SHA::7}" RCC=/usr/lib/qt6/libexec/rcc ondevice/build.sh
+
+      - name: Render the screens with a mock backend
+        run: |
+          out="$RUNNER_TEMP/screens"
+          ondevice/test/render.sh "$out" 2>&1 | tee "$RUNNER_TEMP/render.log"
+          # The renderer carries on past QML errors, so they are looked for in its output.
+          if grep -E "TypeError|ReferenceError|Unable to assign|is not a type|is not defined|Cannot read" "$RUNNER_TEMP/render.log"; then
+            echo "QML errors while rendering"; exit 1
+          fi
+          count=$(ls "$out"/*.png | wc -l)
+          echo "$count screens rendered"
+          [ "$count" -ge 20 ]
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screens
+          path: ${{ runner.temp }}/screens

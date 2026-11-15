@@ -1,10 +1,10 @@
 # Vellum package definition for reManager's on-tablet build.
 # To submit it, copy this directory to packages/ in a checkout of
 # https://github.com/vellum-dev/vellum, fill in the maintainer, tag a release
-# here (ondevice-v$pkgver), run ./scripts/update-checksums.sh remanager-ondevice
-# there, and build it with ./scripts/build-package.sh remanager-ondevice aarch64.
+# here (v$pkgver), run ./scripts/update-checksums.sh remanager-ondevice there,
+# and build it with ./scripts/build-package.sh remanager-ondevice aarch64.
 # The same file builds this repo's own package repository; see
-# .github/workflows/ondevice-package.yml.
+# .github/workflows/release.yml.
 maintainer="Your Name <you@example.com>"
 pkgname=remanager-ondevice
 pkgver=0.1.0
@@ -17,12 +17,11 @@ url="https://github.com/$upstream_author/reManager-ondevice"
 arch="aarch64"
 license="GPL-3.0-only"
 depends="appload !rm1 !rm2 !rmpp !rmppure"
-# On-device releases are tagged ondevice-v*, apart from the desktop app's v* tags.
-_tag="ondevice-v$pkgver"
+_tag="v$pkgver"
 readmeurl="https://raw.githubusercontent.com/$upstream_author/reManager-ondevice/$_tag/ondevice/README.md"
 
 source="$pkgname-$pkgver.tar.gz::https://github.com/$upstream_author/reManager-ondevice/archive/refs/tags/$_tag.tar.gz"
-builddir="$srcdir/reManager-ondevice-$_tag"
+builddir="$srcdir/reManager-ondevice-$pkgver"
 
 image="ghcr.io/toltec-dev/golang:v4.0"
 
