@@ -59,11 +59,20 @@ AppLoad supports two kinds of app:
   shared-memory buffer that AppLoad shows. Client libraries exist for Rust and
   C++ only.
 
-The backend protocol, read from AppLoad's Rust client: a `SOCK_SEQPACKET` Unix
-socket; each message is an 8-byte header (`u32` type, `u32` length, native
-byte order) followed by a UTF-8 payload of at most 10 MiB. Type `0xFFFFFFFF`
-means terminate and `0xFFFFFFFE` means a new frontend attached. There is no Go
-client, but this is small enough to write.
+The backend protocol, read from AppLoad's source (`src/protocol.h`,
+`src/management.cpp`): a `SOCK_SEQPACKET` Unix socket at `/tmp/<app id>.sock`;
+each message is an 8-byte header packet (`int` type, `int` length, native byte
+order) and a UTF-8 contents packet. Types -1, -2 and -3 are AppLoad's own:
+terminate, frontend attached, frontend detached. The stated limit is 10 MiB,
+but a message must fit in one packet of the socket's send buffer, so UI
+messages are kept to tens of kilobytes and long lists are sent in pages.
+`internal/appload` is a Go client for this, with tests.
+
+The tablet runs OS 3.27.3.0. The AppLoad release Vellum offers for 3.26 and
+3.27 is 0.5.3, so that is most likely what is installed; this is inferred, not
+read from the tablet. The protocol files are identical in 0.5.3 and 0.6.0.
+The `aspectRatio` and `width` keys for QML apps were added in 0.6.0, so the
+UI cannot rely on them and has to fit whatever size it is given.
 
 reTaskable is a working precedent: a QML frontend plus a compiled backend,
 built for the Move, shipped as a Vellum package that depends on `appload` and
@@ -151,11 +160,12 @@ These follow from the choice and shape the design.
    until it supports the new version. "Guided recovery after OS updates"
    therefore cannot live only in this app.
 3. **Installing mods can restart the UI the app is drawn in.** Many packages
-   need xovi restarted. If AppLoad starts the backend as a child of
-   `xochitl`, that restart may kill the backend partway through an install.
-   This is not verified. The design assumes the worst: an install runs in its
-   own systemd unit (`systemd-run`), writes a log and a result file under
-   `/home/root`, and the UI reads that state when it comes back.
+   need xovi restarted. AppLoad starts the backend as a child process of
+   `xochitl` (a `QProcess`, read from `src/library.cpp`), so a restart of the
+   stock UI is expected to take the backend with it. An install therefore
+   runs in its own systemd unit (`systemd-run`), writes a log and a result
+   file under `/home/root`, and the UI reads that state when it comes back.
+   Whether `systemd-run` is present on the Move is not checked yet.
 4. **Two UIs, one backend.** The Go packages stay shared with upstream so
    upstream fixes can be merged. On-device code goes in new directories and
    the Wails app keeps building.
@@ -227,8 +237,8 @@ ondevice/manifest.json          AppLoad manifest
 
 - `LocalExecutor` runs each command through `/bin/sh -c` with the same `PATH`
   prefix as `executor.WithDevicePath`, and streams output line by line. It
-  drops `LD_PRELOAD`, which a backend started from `xochitl` would otherwise
-  pass on. It refuses commands marked `RequiresPTY`; nothing in the code sets
+  drops `LD_PRELOAD` (AppLoad already removes it for backends; this covers
+  other ways of starting the binary). It refuses commands marked `RequiresPTY`; nothing in the code sets
   that flag today. Written, with tests.
 - Other models (D2): everything model-specific goes behind one device profile
   (model name, Vellum virtual package, screen size, architecture). Only the
@@ -246,16 +256,15 @@ ondevice/manifest.json          AppLoad manifest
 Milestone 1, in order:
 
 1. `LocalExecutor` with tests. Done.
-2. Go AppLoad client with tests against a local socket.
+2. Go AppLoad client with tests against a local socket. Done.
 3. Backend: list catalogue, list installed, simulate, install.
 4. QML: package list, package detail, confirm, progress.
 5. First run on the Move, after the rehearsal in section 5.
 
 Open questions:
 
-- Which OS version is on the Move? Vellum, xovi and AppLoad are already
-  installed on it. The current AppLoad package needs 3.28 or 3.29.
-- How does AppLoad parent its backend process (consequence 3)?
+- Which AppLoad version is installed? (`vellum info appload`)
+- Is `systemd-run` available on the Move?
 - How much of `packagesservice.go` has to move into `internal/`?
 - What does official software recovery do to documents on the Move?
 
