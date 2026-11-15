@@ -325,7 +325,8 @@ ondevice/manifest.json          AppLoad manifest
   attached frontend send a summary (start, latest progress, result), and
   the full record stays on disk. A reply that cannot be sent is replaced by
   a short error reply. Colour codes are stripped from recorded output, and
-  progress is flushed to disk at most once a second. If the UI does not come
+  progress is flushed to disk at most once a second. Confirmed on the Move:
+  the app opens normally after the fix. If the UI does not come
   back, restarting the tablet brings back the stock UI (section 5).
 - Upgrades come from Vellum's own solver (`upgrade --simulate`) after an
   index refresh, for everything or for named packages. Upgrading the
