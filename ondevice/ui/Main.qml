@@ -479,13 +479,28 @@ Rectangle {
                         width: parent.width
                         height: Math.max(checkText.implicitHeight, fixButton.visible ? fixButton.height : 0) + 12 * root.unit
 
-                        Text {
+                        // Drawn rather than a symbol character: the tablet's font has no check mark.
+                        Item {
                             id: checkMark
-                            anchors { left: parent.left; top: parent.top }
-                            text: modelData.ok ? "✓" : "!"
-                            font.pixelSize: 34 * root.unit
-                            font.bold: true
-                            width: 44 * root.unit
+                            anchors { left: parent.left; top: parent.top; topMargin: 4 * root.unit }
+                            width: 52 * root.unit
+                            height: 32 * root.unit
+                            Rectangle {
+                                width: 30 * root.unit
+                                height: width
+                                radius: width / 2
+                                color: modelData.ok ? "white" : "black"
+                                border.color: "black"
+                                border.width: Math.max(2, 3 * root.unit)
+                                Text {
+                                    anchors.centerIn: parent
+                                    visible: !modelData.ok
+                                    text: "!"
+                                    color: "white"
+                                    font.pixelSize: 24 * root.unit
+                                    font.bold: true
+                                }
+                            }
                         }
                         Column {
                             id: checkText
@@ -626,7 +641,7 @@ Rectangle {
                         }
                         Text {
                             anchors { left: parent.left; leftMargin: 40 * root.unit; right: parent.right; rightMargin: 40 * root.unit; top: rowName.bottom; topMargin: 6 * root.unit }
-                            text: root.tab === "updates" ? (modelData.from ? modelData.from + "  →  " + modelData.to : "New: " + modelData.to) : (modelData.description || "")
+                            text: root.tab === "updates" ? (modelData.from ? modelData.from + "  to  " + modelData.to : "New: " + modelData.to) : (modelData.description || "")
                             elide: Text.ElideRight
                             maximumLineCount: 1
                             font.pixelSize: 28 * root.unit
@@ -904,11 +919,21 @@ Rectangle {
                 border.color: "black"
                 border.width: Math.max(2, 3 * unit)
                 Text {
+                    id: draftText
                     anchors { left: parent.left; leftMargin: 24 * unit; right: clearDraft.left; rightMargin: 16 * unit; verticalCenter: parent.verticalCenter }
-                    text: root.draftQuery === "" ? "Name or description" : root.draftQuery + "▏"
+                    text: root.draftQuery === "" ? "Name or description" : root.draftQuery
                     color: root.draftQuery === "" ? "#888888" : "black"
                     elide: Text.ElideLeft
                     font.pixelSize: 40 * unit
+                }
+                // The cursor is drawn, as the tablet's font may lack a bar character.
+                Rectangle {
+                    visible: root.draftQuery !== ""
+                    x: draftText.x + Math.min(draftText.contentWidth, draftText.width) + 4 * unit
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.max(2, 3 * unit)
+                    height: 48 * unit
+                    color: "black"
                 }
                 SmallButton {
                     id: clearDraft

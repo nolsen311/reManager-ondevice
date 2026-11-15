@@ -418,6 +418,9 @@ ondevice/manifest.json          AppLoad manifest
   adds them from `vellum list --available` (newest version of each name)
   and `vellum info -d`, cached for a minute. A name in the catalogue for
   any device is not added; `-doc`, `-dev` and hidden packages are left out.
+- The tablet's font lacks some symbols: the check mark showed as an empty
+  box on the Move. The screens use only plain text and ordinary punctuation
+  ("…", "·", "•", quotes), and draw marks and the text cursor as shapes.
 - `ondevice/build.sh` builds the app folder (manifest, icon, `resources.rcc`,
   `backend/entry`) into `ondevice/output/remanager`.
 

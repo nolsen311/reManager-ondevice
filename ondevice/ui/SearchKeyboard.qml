@@ -53,8 +53,8 @@ Item {
                     border.width: Math.max(2, 2 * keyboard.unit)
                     Text {
                         anchors.centerIn: parent
-                        text: "⌫"
-                        font.pixelSize: 40 * keyboard.unit
+                        text: "Delete"
+                        font.pixelSize: 32 * keyboard.unit
                     }
                     MouseArea {
                         anchors.fill: parent
