@@ -30,7 +30,12 @@ const usage = `usage:
   remanager-ondevice info <package>       show one package
   remanager-ondevice plan <package>...    show what an install would do, changing nothing
   remanager-ondevice install <package>... install, in this process
-  remanager-ondevice job                  show the last install started from the app
+  remanager-ondevice plan-remove <package>...   show what a removal would do, changing nothing
+  remanager-ondevice remove <package>...  remove, in this process
+  remanager-ondevice upgrades             list available upgrades (refreshes Vellum's index)
+  remanager-ondevice plan-upgrade [package]...  show what an upgrade would do, changing nothing
+  remanager-ondevice upgrade [package]... upgrade the named packages, or everything
+  remanager-ondevice job                  show the last job started from the app
 
 options, before the subcommand:
   --allow-untested   run on a tablet model this build has not been tried on
@@ -113,6 +118,31 @@ func run(args []string, allowUntested bool) error {
 		return printJSON(plan)
 	case "install":
 		return reportInstall(service.Install(args[1:], printProgress))
+	case "plan-remove":
+		plan, err := service.PlanRemove(args[1:])
+		if err != nil {
+			return err
+		}
+		return printJSON(plan)
+	case "remove":
+		return reportInstall(service.Remove(args[1:], printProgress))
+	case "upgrades":
+		upgrades, err := service.Upgrades()
+		if err != nil {
+			return err
+		}
+		for _, u := range upgrades {
+			fmt.Printf("%-36s %s -> %s\n", u.Name, u.From, u.To)
+		}
+		return nil
+	case "plan-upgrade":
+		plan, err := service.PlanUpgrade(args[1:])
+		if err != nil {
+			return err
+		}
+		return printJSON(plan)
+	case "upgrade":
+		return reportInstall(service.Upgrade(args[1:], printProgress))
 	case "worker":
 		return runWorker(args[1:], service)
 	default:
@@ -129,13 +159,21 @@ func run(args []string, allowUntested bool) error {
 	}
 }
 
-// runWorker is what the app's install runs as, in its own systemd unit: worker install --state <dir> -- <package>...
+// runWorker is what a job started from the app runs as, in its own systemd unit: worker <action> --state <dir> -- [package]...
 func runWorker(args []string, service *ondevice.Service) error {
-	if len(args) < 4 || args[0] != "install" || args[1] != "--state" || args[3] != "--" {
+	if len(args) < 4 || args[1] != "--state" || args[3] != "--" {
 		return fmt.Errorf("worker is started by the app, not by hand")
 	}
+	run := map[string]func([]string, func(ondevice.Progress)) ondevice.InstallResult{
+		ondevice.ActionInstall: service.Install,
+		ondevice.ActionRemove:  service.Remove,
+		ondevice.ActionUpgrade: service.Upgrade,
+	}[args[0]]
+	if run == nil {
+		return fmt.Errorf("unknown worker action %q", args[0])
+	}
 	jobs := &ondevice.Jobs{Dir: args[2]}
-	return jobs.RunWorker(args[4:], service.Install)
+	return jobs.RunWorker(args[0], args[4:], run)
 }
 
 func printProgress(p ondevice.Progress) {

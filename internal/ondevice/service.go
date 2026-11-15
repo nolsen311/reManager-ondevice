@@ -52,8 +52,17 @@ type PackageSummary struct {
 	Compatible       bool   `json:"compatible"`
 }
 
+// Upgrade is an installed package Vellum would move to another version.
+type Upgrade struct {
+	Name string `json:"name"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
 type PackageDetail struct {
 	PackageSummary
+	// Protected packages are ones this app runs on, so it will not remove them.
+	Protected          bool     `json:"protected"`
 	Author             string   `json:"author,omitempty"`
 	License            string   `json:"license,omitempty"`
 	URL                string   `json:"url,omitempty"`
@@ -75,14 +84,23 @@ type ListResult struct {
 	Offset   int              `json:"offset"`
 }
 
-// Plan is what an install would do, worked out by Vellum without changing anything.
+// The jobs the service can plan and run.
+const (
+	ActionInstall = "install"
+	ActionRemove  = "remove"
+	ActionUpgrade = "upgrade"
+)
+
+// Plan is what a job would do, worked out by Vellum without changing anything.
 type Plan struct {
+	Action string `json:"action"`
+	// Requested is empty for an upgrade of everything.
 	Requested []string `json:"requested"`
-	// Packages is everything that would be installed or changed, dependencies included.
+	// Packages is everything that would be installed, changed or removed, dependencies included.
 	Packages []string `json:"packages"`
 	// Upgrades maps a package that is already installed to "old -> new".
 	Upgrades map[string]string `json:"upgrades,omitempty"`
-	// Error is Vellum's explanation when the request cannot be satisfied; the plan is then not installable.
+	// Error says why the request cannot be carried out; the plan is then not runnable.
 	Error string `json:"error,omitempty"`
 }
 
@@ -107,6 +125,14 @@ var hiddenPackages = map[string]bool{
 	"vellum-bash-completion": true,
 	"mount-utils":            true,
 	"/bin/sh":                true,
+}
+
+// What the app itself runs on. Removing one of these from inside the app would leave no app to finish or undo the job.
+var protectedPackages = map[string]bool{
+	"vellum":                true,
+	"xovi":                  true,
+	"qt-resource-rebuilder": true,
+	"appload":               true,
 }
 
 func hidden(name string) bool {
@@ -209,6 +235,7 @@ func (s *Service) Detail(name string) (*PackageDetail, error) {
 		}
 		return &PackageDetail{
 			PackageSummary:     summarize(pkg, installed),
+			Protected:          protectedPackages[pkg.Name],
 			Author:             pkg.UpstreamAuthor,
 			License:            pkg.License,
 			URL:                pkg.URL,
@@ -234,6 +261,10 @@ func checkNames(names []string) error {
 
 // A package that needs "a launcher" or another virtual gets the catalogue's preferred provider added, so Vellum is not left to pick.
 func (s *Service) withPreferredProviders(names []string) []string {
+	// The worker starts with no catalogue loaded; without it the worker would install a different set than the plan the frontend showed.
+	if !s.catalog.Ready() {
+		s.catalog.Refresh()
+	}
 	if !s.catalog.Ready() {
 		return names
 	}
@@ -269,10 +300,10 @@ func (s *Service) Plan(names []string) (*Plan, error) {
 		if failure == "" {
 			failure = err.Error()
 		}
-		return &Plan{Requested: names, Packages: []string{}, Error: failure}, nil
+		return &Plan{Action: ActionInstall, Requested: names, Packages: []string{}, Error: failure}, nil
 	}
 
-	plan := &Plan{Requested: names, Packages: simulation.Packages}
+	plan := &Plan{Action: ActionInstall, Requested: names, Packages: simulation.Packages}
 	if plan.Packages == nil {
 		plan.Packages = []string{}
 	}
@@ -303,32 +334,193 @@ func (s *Service) Install(names []string, onProgress func(Progress)) InstallResu
 
 	var deferred []string
 	inst := installer.NewInstaller(s.vellum, s.metadata, s.exec)
-	result := inst.Install(
-		toInstall,
-		plan.Packages,
-		component.CommandContext{Arch: s.device.Arch, Device: s.device.Type},
-		func(p executor.ProgressInfo) {
-			if onProgress != nil {
-				onProgress(Progress{
-					Package: p.CurrentComponent,
-					Index:   p.CurrentIndex,
-					Total:   p.TotalComponents,
-					Status:  string(p.Status),
-					Message: p.Message,
-				})
-			}
-		},
-		// Post-install steps can restart the stock UI, which this build does not do yet, so each one is recorded and left for later.
-		func(hook *component.HookExecutionResult) error {
-			if hook.DialogConfig != nil && hook.DialogConfig.Title != "" {
-				deferred = append(deferred, hook.DialogConfig.Title)
-			} else if hook.Command != nil && hook.Command.Description != "" {
-				deferred = append(deferred, hook.Command.Description)
-			} else {
-				deferred = append(deferred, "A post-install step")
-			}
-			return installer.ErrHookDeclined
-		},
-	)
+	result := inst.Install(toInstall, plan.Packages, s.commandContext(), relay(onProgress), deferHooks(&deferred))
 	return InstallResult{Success: result.Success, Errors: result.Errors, Deferred: deferred}
+}
+
+func (s *Service) commandContext() component.CommandContext {
+	return component.CommandContext{Arch: s.device.Arch, Device: s.device.Type}
+}
+
+func relay(onProgress func(Progress)) executor.ProgressCallback {
+	return func(p executor.ProgressInfo) {
+		if onProgress != nil {
+			onProgress(Progress{
+				Package: p.CurrentComponent,
+				Index:   p.CurrentIndex,
+				Total:   p.TotalComponents,
+				Status:  string(p.Status),
+				Message: p.Message,
+			})
+		}
+	}
+}
+
+// Steps a package asks for around an install or removal can restart the stock UI, which this build does not do yet, so each one is recorded and left for later.
+func deferHooks(deferred *[]string) installer.HookCallback {
+	return func(hook *component.HookExecutionResult) error {
+		switch {
+		case hook.DialogConfig != nil && hook.DialogConfig.Title != "":
+			*deferred = append(*deferred, hook.DialogConfig.Title)
+		case hook.Command != nil && hook.Command.Description != "":
+			*deferred = append(*deferred, hook.Command.Description)
+		default:
+			*deferred = append(*deferred, "A follow-up step")
+		}
+		return installer.ErrHookDeclined
+	}
+}
+
+func blockedPlan(action string, names []string, reason string) *Plan {
+	return &Plan{Action: action, Requested: names, Packages: []string{}, Error: reason}
+}
+
+// PlanRemove asks Vellum what removing names would take with it. It refuses, with a reason in the plan, anything that would remove more than was asked for by surprise or take away what the app runs on.
+func (s *Service) PlanRemove(names []string) (*Plan, error) {
+	if err := checkNames(names); err != nil {
+		return nil, err
+	}
+	installed, err := s.vellum.ListInstalledWithVersions()
+	if err != nil {
+		return nil, fmt.Errorf("could not list installed packages: %w", err)
+	}
+	for _, name := range names {
+		if protectedPackages[name] {
+			return blockedPlan(ActionRemove, names, name+" is part of what this app runs on. Remove it from a computer."), nil
+		}
+		if _, ok := installed[name]; !ok {
+			return blockedPlan(ActionRemove, names, name+" is not installed."), nil
+		}
+	}
+
+	simulation, err := s.vellum.SimulateDel(names...)
+	if err != nil {
+		return blockedPlan(ActionRemove, names, err.Error()), nil
+	}
+	if len(simulation.Blocked) > 0 {
+		var reasons []string
+		for pkg, blockers := range simulation.Blocked {
+			sort.Strings(blockers)
+			reasons = append(reasons, pkg+" is needed by "+strings.Join(blockers, ", ")+".")
+		}
+		sort.Strings(reasons)
+		return blockedPlan(ActionRemove, names, strings.Join(reasons, " ")+" Remove those first."), nil
+	}
+	removed := make(map[string]bool, len(simulation.Packages))
+	for _, pkg := range simulation.Packages {
+		removed[pkg] = true
+		if protectedPackages[pkg] {
+			return blockedPlan(ActionRemove, names, "This would also remove "+pkg+", which this app runs on. Do it from a computer."), nil
+		}
+	}
+	for _, name := range names {
+		if !removed[name] {
+			return blockedPlan(ActionRemove, names, "Vellum would leave "+name+" installed, most likely because another mod needs it."), nil
+		}
+	}
+	return &Plan{Action: ActionRemove, Requested: names, Packages: simulation.Packages}, nil
+}
+
+// Remove removes names, and whatever was only installed for them, in one Vellum transaction.
+func (s *Service) Remove(names []string, onProgress func(Progress)) InstallResult {
+	plan, err := s.PlanRemove(names)
+	if err != nil {
+		return InstallResult{Errors: []string{err.Error()}}
+	}
+	if plan.Error != "" {
+		return InstallResult{Errors: []string{plan.Error}}
+	}
+	var deferred []string
+	inst := installer.NewInstaller(s.vellum, s.metadata, s.exec)
+	result := inst.Uninstall(names, plan.Packages, false, true, s.commandContext(), relay(onProgress), deferHooks(&deferred))
+	return InstallResult{Success: result.Success, Errors: result.Errors, Deferred: deferred}
+}
+
+func (s *Service) simulateUpgrade(names []string) ([]Upgrade, error) {
+	candidates, err := s.vellum.SimulateUpgradeWithVersions(names...)
+	if err != nil {
+		return nil, err
+	}
+	// Only for the "from" column, so a failure costs that and not the answer.
+	installed, _ := s.vellum.ListInstalledWithVersions()
+	upgrades := []Upgrade{}
+	for _, c := range candidates {
+		if vellum.IsVirtualPackage(c.Name) {
+			continue
+		}
+		upgrades = append(upgrades, Upgrade{Name: c.Name, From: installed[c.Name], To: c.Version})
+	}
+	sort.Slice(upgrades, func(i, j int) bool { return upgrades[i].Name < upgrades[j].Name })
+	return upgrades, nil
+}
+
+// Upgrades refreshes Vellum's package index, which needs the tablet to be online, and returns what an upgrade of everything would change.
+func (s *Service) Upgrades() ([]Upgrade, error) {
+	// With a stale index the answer is still true of what the tablet knows about, so a failed refresh is not fatal.
+	s.vellum.UpdateIndex()
+	return s.simulateUpgrade(nil)
+}
+
+// PlanUpgrade asks Vellum what upgrading names would change; no names means everything.
+func (s *Service) PlanUpgrade(names []string) (*Plan, error) {
+	if len(names) > 0 {
+		if err := checkNames(names); err != nil {
+			return nil, err
+		}
+	} else {
+		names = []string{}
+	}
+	upgrades, err := s.simulateUpgrade(names)
+	if err != nil {
+		return blockedPlan(ActionUpgrade, names, err.Error()), nil
+	}
+	plan := &Plan{Action: ActionUpgrade, Requested: names, Packages: []string{}}
+	if len(upgrades) > 0 {
+		plan.Upgrades = make(map[string]string, len(upgrades))
+	}
+	for _, u := range upgrades {
+		plan.Packages = append(plan.Packages, u.Name)
+		if u.From != "" {
+			plan.Upgrades[u.Name] = u.From + " -> " + u.To
+		} else {
+			plan.Upgrades[u.Name] = "new, " + u.To
+		}
+	}
+	return plan, nil
+}
+
+// Upgrade upgrades names, or everything when there are none.
+func (s *Service) Upgrade(names []string, onProgress func(Progress)) InstallResult {
+	plan, err := s.PlanUpgrade(names)
+	if err != nil {
+		return InstallResult{Errors: []string{err.Error()}}
+	}
+	if plan.Error != "" {
+		return InstallResult{Errors: []string{plan.Error}}
+	}
+	if len(plan.Packages) == 0 {
+		return InstallResult{Success: true}
+	}
+
+	var lastError string
+	err = s.vellum.UpgradeStreaming(func(line string) {
+		if strings.HasPrefix(strings.TrimSpace(line), "ERROR:") {
+			lastError = strings.TrimSpace(line)
+		}
+		if onProgress == nil {
+			return
+		}
+		p := Progress{Status: string(executor.StatusInstalling), Message: line}
+		if pkg, index, total, ok := vellum.ParseUpgradeProgress(line); ok {
+			p.Package, p.Index, p.Total = pkg, index, total
+		}
+		onProgress(p)
+	}, names...)
+	if err != nil {
+		if lastError == "" {
+			lastError = err.Error()
+		}
+		return InstallResult{Errors: []string{"Update failed: " + lastError}}
+	}
+	return InstallResult{Success: true}
 }

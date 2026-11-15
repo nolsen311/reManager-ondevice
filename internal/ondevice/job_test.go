@@ -29,8 +29,8 @@ func inProcessJobs(t *testing.T, result InstallResult, release chan struct{}) *J
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			worker.RunWorker(names, func(names []string, onProgress func(Progress)) InstallResult {
-				onProgress(Progress{Package: names[0], Index: 0, Total: 1, Status: "installing", Message: "Installing " + names[0]})
+			worker.RunWorker(args[1], names, func(names []string, onProgress func(Progress)) InstallResult {
+				onProgress(Progress{Index: 0, Total: 1, Status: "installing", Message: "Working"})
 				if release != nil {
 					<-release
 				}
@@ -53,7 +53,7 @@ func kinds(events []Event) []string {
 func TestJobRecordsAndFollows(t *testing.T) {
 	jobs := inProcessJobs(t, InstallResult{Success: true, Deferred: []string{"Build hashtable"}}, nil)
 
-	if err := jobs.StartInstall([]string{"koreader"}); err != nil {
+	if err := jobs.Start(ActionInstall, []string{"koreader"}); err != nil {
 		t.Fatal(err)
 	}
 	var events []Event
@@ -93,7 +93,7 @@ func TestJobRefusesASecondInstall(t *testing.T) {
 	jobs := inProcessJobs(t, InstallResult{Success: true}, release)
 	defer close(release)
 
-	if err := jobs.StartInstall([]string{"one"}); err != nil {
+	if err := jobs.Start(ActionInstall, []string{"one"}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -103,7 +103,7 @@ func TestJobRefusesASecondInstall(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := jobs.StartInstall([]string{"two"}); !errors.Is(err, ErrJobRunning) {
+	if err := jobs.Start(ActionRemove, []string{"two"}); !errors.Is(err, ErrJobRunning) {
 		t.Errorf("want ErrJobRunning, got %v", err)
 	}
 	events, _ := jobs.Events(0)
@@ -117,7 +117,7 @@ func TestJobStartRejectsBadNamesBeforeLaunching(t *testing.T) {
 		t.Error("worker launched")
 		return nil
 	}}
-	if err := jobs.StartInstall([]string{"$(reboot)"}); err == nil {
+	if err := jobs.Start(ActionInstall, []string{"$(reboot)"}); err == nil {
 		t.Error("want an error")
 	}
 }
@@ -281,6 +281,13 @@ func TestHandlerInstallStreamsEvents(t *testing.T) {
 		t.Errorf("events = %v", got)
 	}
 
+	var started Event
+	events, _ := jobs.Events(0)
+	started = events[0]
+	if started.Action != ActionInstall {
+		t.Errorf("started = %+v, want the action recorded", started)
+	}
+
 	resp = f.request(t, `{"id":2,"method":"job"}`)
 	job := resp["result"].(map[string]any)
 	if job["running"] != false || len(job["events"].([]any)) != 3 {
@@ -291,7 +298,7 @@ func TestHandlerInstallStreamsEvents(t *testing.T) {
 func TestHandlerResumesAnInstallWhenAFrontendAttaches(t *testing.T) {
 	release := make(chan struct{})
 	jobs := inProcessJobs(t, InstallResult{Success: true}, release)
-	if err := jobs.StartInstall([]string{"koreader"}); err != nil {
+	if err := jobs.Start(ActionInstall, []string{"koreader"}); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); !jobs.Running(); {
@@ -320,6 +327,40 @@ func TestHandlerResumesAnInstallWhenAFrontendAttaches(t *testing.T) {
 		json.Unmarshal([]byte(f.next(t).Contents), &e)
 		if e.Kind == EventDone {
 			break
+		}
+	}
+}
+
+func TestHandlerStartsRemovalsAndUpgrades(t *testing.T) {
+	for _, c := range []struct{ request, action string }{
+		{`{"id":1,"method":"remove","params":{"names":["retaskable"]}}`, ActionRemove},
+		{`{"id":1,"method":"upgrade","params":{"names":[]}}`, ActionUpgrade},
+	} {
+		jobs := inProcessJobs(t, InstallResult{Success: true}, nil)
+		h := &Handler{Service: newTestService(standardCatalog(), standardTablet()), Jobs: jobs}
+		f := serve(t, h)
+
+		if resp := f.request(t, c.request); resp["error"] != nil {
+			t.Fatalf("%s = %v", c.action, resp)
+		}
+		var started Event
+		json.Unmarshal([]byte(f.next(t).Contents), &started)
+		if started.Kind != EventStarted || started.Action != c.action {
+			t.Errorf("first event = %+v, want %s started", started, c.action)
+		}
+	}
+}
+
+func TestHandlerRefusesAnInstallOfNothing(t *testing.T) {
+	h := &Handler{Service: newTestService(standardCatalog(), standardTablet()), Jobs: &Jobs{Dir: t.TempDir(), Launch: func([]string) error {
+		t.Error("worker launched")
+		return nil
+	}}}
+	f := serve(t, h)
+
+	for _, method := range []string{"install", "remove"} {
+		if resp := f.request(t, `{"id":1,"method":"`+method+`","params":{"names":[]}}`); resp["error"] == nil {
+			t.Errorf("%s of nothing should be refused, got %v", method, resp)
 		}
 	}
 }

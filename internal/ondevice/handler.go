@@ -19,7 +19,7 @@ const (
 	MsgRequest int32 = 1
 	// MsgResponse is backend to frontend: {"id": 1, "result": {...}} or {"id": 1, "error": "..."}.
 	MsgResponse int32 = 2
-	// MsgInstallEvent is backend to frontend, unprompted: one Event of the running install.
+	// MsgInstallEvent is backend to frontend, unprompted: one Event of the running job.
 	MsgInstallEvent int32 = 3
 	// MsgReady is backend to frontend, with no contents, each time a frontend attaches. AppLoad drops what a frontend sends before the backend has connected, so the frontend waits for this before its first request.
 	MsgReady int32 = 4
@@ -81,7 +81,7 @@ func (h *Handler) Serve(ctx context.Context, t Transport) error {
 			return nil
 		case appload.TypeFrontendAttached:
 			t.Send(MsgReady, "")
-			// A frontend that opens during an install, or after the stock UI restarted, picks the install back up.
+			// A frontend that opens during a job, or after the stock UI restarted, picks the job back up.
 			if h.Jobs.Running() {
 				h.follow(ctx, t, 0)
 			}
@@ -151,12 +151,26 @@ func (h *Handler) call(ctx context.Context, t Transport, req request) (any, erro
 			return nil, err
 		}
 		return h.Service.Plan(p.Names)
-	case "install":
+	case "planRemove":
 		var p namesParams
 		if err := params(&p); err != nil {
 			return nil, err
 		}
-		if err := h.Jobs.StartInstall(p.Names); err != nil {
+		return h.Service.PlanRemove(p.Names)
+	case "upgrades":
+		return h.Service.Upgrades()
+	case "planUpgrade":
+		var p namesParams
+		if err := params(&p); err != nil {
+			return nil, err
+		}
+		return h.Service.PlanUpgrade(p.Names)
+	case ActionInstall, ActionRemove, ActionUpgrade:
+		var p namesParams
+		if err := params(&p); err != nil {
+			return nil, err
+		}
+		if err := h.Jobs.Start(req.Method, p.Names); err != nil {
 			return nil, err
 		}
 		h.follow(ctx, t, 0)
@@ -168,7 +182,7 @@ func (h *Handler) call(ctx context.Context, t Transport, req request) (any, erro
 	}
 }
 
-// follow forwards the install's events to the frontend in the background. One follower at a time, so an event is never sent twice.
+// follow forwards the job's events to the frontend in the background. One follower at a time, so an event is never sent twice.
 func (h *Handler) follow(ctx context.Context, t Transport, after int) {
 	h.followMu.Lock()
 	if h.following {

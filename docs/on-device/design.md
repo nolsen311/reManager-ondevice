@@ -220,7 +220,7 @@ not come back within a set time after an install.
 | Upstream feature | On-device | Notes |
 |------------------|-----------|-------|
 | Browse and install mods | Milestone 1 | The goal. |
-| Upgrade and uninstall mods | Next | Same Vellum client. |
+| Upgrade and uninstall mods | Built | Tested against a fake tablet and rendered with mock data; not yet run on the Move. |
 | Saved SSH logins for several devices | Drop | One device, local, no credentials. |
 | Built-in terminal | Drop | No keyboard worth using; SSH remains for this. |
 | File transfer to and from a computer | Drop | No computer in the picture. |
@@ -268,26 +268,38 @@ ondevice/manifest.json          AppLoad manifest
 - Post-install steps that packages ask for (today: rebuilding the hashtable)
   are not run. They stop the stock UI, so they wait until that path is
   designed. The install result names each step it skipped.
-- The frontend's install runs in a worker: the same binary, started by
-  `systemd-run` as the unit `remanager-ondevice-install`. It holds a lock
-  for the whole install and appends each step to
-  `/home/root/.local/state/remanager-ondevice/install.jsonl`. A backend that
-  starts later replays that file to the frontend.
+- Removal is deliberately narrower than upstream's. It removes what was
+  asked for plus whatever Vellum purges with it, in one transaction, and
+  refuses in four cases: the package is one the app runs on (`vellum`,
+  `xovi`, `qt-resource-rebuilder`, `appload`); the removal would take one of
+  those with it; other mods still need the package (it names them and does
+  not remove them for you); or Vellum would leave the package installed.
+- Upgrades come from Vellum's own solver (`upgrade --simulate`) after an
+  index refresh, for everything or for named packages. Upgrading the
+  packages the app runs on is allowed; they take effect when xovi restarts.
+  No post-upgrade steps are run, as upstream.
+- A job started from the frontend (install, remove or upgrade) runs in a
+  worker: the same binary, started by `systemd-run` as the unit
+  `remanager-ondevice-job`. It holds a lock for the whole job and appends
+  each step to `/home/root/.local/state/remanager-ondevice/job.jsonl`. A
+  backend that starts later replays that file to the frontend.
 - Frontend and backend exchange JSON: type 1 is a request (`device`,
-  `refresh`, `list`, `detail`, `plan`, `install`, `job`), type 2 its reply,
-  type 3 an install event.
-- The binary also runs from a shell (`list`, `installed`, `info`, `plan`,
-  `install`, `job`), so the backend can be tried over SSH before the UI
-  exists. `list`, `installed`, `info`, `plan` and `job` change nothing on
-  the tablet.
+  `refresh`, `list`, `detail`, `plan`, `planRemove`, `upgrades`,
+  `planUpgrade`, `install`, `remove`, `upgrade`, `job`), type 2 its reply,
+  type 3 a job event, type 4 "backend ready".
+- The binary also runs from a shell, so the backend can be tried over SSH.
+  `list`, `installed`, `info`, `plan`, `plan-remove`, `plan-upgrade` and
+  `job` change nothing on the tablet. `upgrades` refreshes Vellum's package
+  index and changes nothing else. `install`, `remove` and `upgrade` do the
+  real thing.
 - It refuses to run on a model other than the Move unless given
   `--allow-untested`.
 
 ### Frontend as built
 
-- `ondevice/ui/Main.qml` has four screens: list (all or installed, nine per
-  page, with Previous and Next instead of scrolling), detail, plan and
-  progress. It is black on white with no animation, and every size is a
+- `ondevice/ui/Main.qml` has four screens: list (all, installed or updates,
+  nine per page, with Previous and Next instead of scrolling), detail, plan
+  and progress. Plan and progress serve install, remove and update alike. It is black on white with no animation, and every size is a
   fraction of the width so it fits a window as well as the full screen.
 - It uses only `QtQuick` and AppLoad's endpoint, not Qt Quick Controls.
 - The frontend waits for a "ready" message (type 4) before its first

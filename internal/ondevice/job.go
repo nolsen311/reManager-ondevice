@@ -16,26 +16,27 @@ import (
 	"time"
 )
 
-// An install runs in a worker process outside the stock UI's service, because
-// AppLoad starts the backend as a child of the stock UI and a restart of the
-// stock UI would take an in-process install down with it. The worker writes
+// An install, removal or upgrade runs in a worker process outside the stock
+// UI's service, because AppLoad starts the backend as a child of the stock UI
+// and a restart of the stock UI would take an in-process job down with it. The worker writes
 // what it does to a file; the backend, or a backend started later, reads it.
 
 const (
 	// DefaultStateDir is on the home partition, never the root partition.
 	DefaultStateDir = "/home/root/.local/state/remanager-ondevice"
 
-	installUnit   = "remanager-ondevice-install"
-	eventsFile    = "install.jsonl"
-	lockFile      = "install.lock"
+	jobUnit       = "remanager-ondevice-job"
+	eventsFile    = "job.jsonl"
+	lockFile      = "job.lock"
 	maxOutputLine = 2000
 )
 
-// Event is one line of the worker's record of an install.
+// Event is one line of the worker's record of a job.
 type Event struct {
 	Seq  int    `json:"seq"`
 	Kind string `json:"kind"`
-	// Packages is set on "started".
+	// Action and Packages are set on "started". An upgrade of everything has no packages.
+	Action   string   `json:"action,omitempty"`
 	Packages []string `json:"packages,omitempty"`
 	// Progress is set on "progress".
 	Progress *Progress `json:"progress,omitempty"`
@@ -49,18 +50,18 @@ const (
 	EventDone     = "done"
 )
 
-// ErrJobRunning means an install is already in progress; Vellum is not safe to run twice at once.
-var ErrJobRunning = errors.New("an install is already running")
+// ErrJobRunning means a job is already in progress; Vellum is not safe to run twice at once.
+var ErrJobRunning = errors.New("another install, removal or update is still running")
 
-// Jobs starts installs in a worker process and reads back what they did.
+// Jobs starts installs, removals and upgrades in a worker process and reads back what they did.
 type Jobs struct {
-	// Dir holds the worker's lock and its record of the last install.
+	// Dir holds the worker's lock and its record of the last job.
 	Dir string
 	// Launch starts the worker with the given arguments and returns once it is running. Nil means a transient systemd unit running this executable.
 	Launch func(args []string) error
 }
 
-// JobStatus is the state of the most recent install.
+// JobStatus is the state of the most recent job.
 type JobStatus struct {
 	Running bool    `json:"running"`
 	Events  []Event `json:"events"`
@@ -73,7 +74,22 @@ func (j *Jobs) dir() string {
 	return DefaultStateDir
 }
 
-// lock takes the install lock, which the kernel releases if the holder dies. It returns ErrJobRunning when another process holds it. The worker holds it exclusively; a check for a running worker takes it shared, so two checks never look like a worker to each other.
+// Only an upgrade may have no names: that means everything.
+func checkJob(action string, names []string) error {
+	switch action {
+	case ActionInstall, ActionRemove:
+		return checkNames(names)
+	case ActionUpgrade:
+		if len(names) == 0 {
+			return nil
+		}
+		return checkNames(names)
+	default:
+		return fmt.Errorf("unknown action %q", action)
+	}
+}
+
+// lock takes the job lock, which the kernel releases if the holder dies. It returns ErrJobRunning when another process holds it. The worker holds it exclusively; a check for a running worker takes it shared, so two checks never look like a worker to each other.
 func (j *Jobs) lock(how int) (*os.File, error) {
 	if err := os.MkdirAll(j.dir(), 0o755); err != nil {
 		return nil, err
@@ -101,19 +117,19 @@ func (j *Jobs) Running() bool {
 	return false
 }
 
-// StartInstall launches a worker to install names and returns once it has been asked to start.
-func (j *Jobs) StartInstall(names []string) error {
-	if err := checkNames(names); err != nil {
+// Start launches a worker to run action on names and returns once it has been asked to start.
+func (j *Jobs) Start(action string, names []string) error {
+	if err := checkJob(action, names); err != nil {
 		return err
 	}
 	if j.Running() {
 		return ErrJobRunning
 	}
-	// The last install's record goes now, so a reader never mistakes it for this one's.
+	// The last job's record goes now, so a reader never mistakes it for this one's.
 	if err := os.Remove(filepath.Join(j.dir(), eventsFile)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	args := append([]string{"worker", "install", "--state", j.dir(), "--"}, names...)
+	args := append([]string{"worker", action, "--state", j.dir(), "--"}, names...)
 	launch := j.Launch
 	if launch == nil {
 		launch = launchInSystemdUnit
@@ -121,22 +137,25 @@ func (j *Jobs) StartInstall(names []string) error {
 	return launch(args)
 }
 
-// --collect removes the unit when it ends, even on failure, so the fixed name is free for the next install.
+// --collect removes the unit when it ends, even on failure, so the fixed name is free for the next job.
 func launchInSystemdUnit(args []string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	cmd := exec.Command("systemd-run",
-		append([]string{"--unit=" + installUnit, "--collect", "--quiet", "--setenv=HOME=/home/root", exe}, args...)...)
+		append([]string{"--unit=" + jobUnit, "--collect", "--quiet", "--setenv=HOME=/home/root", exe}, args...)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("could not start the install worker: %w: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("could not start the worker: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-// RunWorker is the worker's side: it holds the lock for the whole install and records every step. install does the work and reports through the callback.
-func (j *Jobs) RunWorker(names []string, install func(names []string, onProgress func(Progress)) InstallResult) error {
+// RunWorker is the worker's side: it holds the lock for the whole job and records every step. run does the work and reports through the callback.
+func (j *Jobs) RunWorker(action string, names []string, run func(names []string, onProgress func(Progress)) InstallResult) error {
+	if err := checkJob(action, names); err != nil {
+		return err
+	}
 	// A backend checking for a running worker holds the lock for an instant, so one refusal does not mean another worker.
 	var lock *os.File
 	var err error
@@ -164,12 +183,12 @@ func (j *Jobs) RunWorker(names []string, install func(names []string, onProgress
 		e.Seq = seq
 		line, _ := json.Marshal(e)
 		f.Write(append(line, '\n'))
-		// The stock UI may be restarted, or the tablet rebooted, at any point in an install.
+		// The stock UI may be restarted, or the tablet rebooted, at any point in a job.
 		f.Sync()
 	}
 
-	write(Event{Kind: EventStarted, Packages: names})
-	result := install(names, func(p Progress) {
+	write(Event{Kind: EventStarted, Action: action, Packages: names})
+	result := run(names, func(p Progress) {
 		if len(p.Message) > maxOutputLine {
 			p.Message = p.Message[:maxOutputLine]
 		}
@@ -212,7 +231,7 @@ func (j *Jobs) Status() (JobStatus, error) {
 	return JobStatus{Running: running, Events: events}, err
 }
 
-// Follow reports events after the given sequence number as the worker records them, and returns when the install is done, the worker has gone, or ctx ends.
+// Follow reports events after the given sequence number as the worker records them, and returns when the job is done, the worker has gone, or ctx ends.
 func (j *Jobs) Follow(ctx context.Context, after int, onEvent func(Event)) error {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
@@ -235,7 +254,7 @@ func (j *Jobs) Follow(ctx context.Context, after int, onEvent func(Event)) error
 			idle = 0
 		} else if idle++; idle > 20 {
 			// Long enough for a worker that was just launched to take the lock.
-			return fmt.Errorf("the install stopped without reporting a result")
+			return fmt.Errorf("the job stopped without reporting a result")
 		}
 		select {
 		case <-ctx.Done():

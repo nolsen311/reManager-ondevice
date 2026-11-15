@@ -29,13 +29,17 @@ Rectangle {
     property string errorText: ""
 
     property var device: null
-    property bool installedOnly: false
+    property string tab: "all"   // all, installed, updates
     property int offset: 0
     property int total: 0
     property var packages: []
+    property var upgrades: []
     property var detail: null
     property var plan: null
+    // The screen a plan was opened from, to go back to on Cancel.
+    property string planFrom: "detail"
 
+    property string jobAction: "install"
     property var jobPackages: []
     property string jobMessage: ""
     property int jobIndex: 0
@@ -81,12 +85,41 @@ Rectangle {
     }
 
     function loadList(newOffset) {
-        request("list", { installedOnly: installedOnly, offset: newOffset, limit: pageSize }, function (result) {
+        if (tab === "updates") {
+            // Checking for updates refreshes Vellum's index, so it is asked for once per visit and paged here.
+            if (newOffset > 0 && upgrades.length > 0) {
+                showUpgrades(newOffset)
+                return
+            }
+            packages = []
+            total = 0
+            offset = 0
+            screen = "list"
+            request("upgrades", {}, function (result) {
+                upgrades = result
+                showUpgrades(0)
+            })
+            return
+        }
+        request("list", { installedOnly: tab === "installed", offset: newOffset, limit: pageSize }, function (result) {
             packages = result.packages
             total = result.total
             offset = result.offset
             screen = "list"
         })
+    }
+
+    function showUpgrades(newOffset) {
+        total = upgrades.length
+        offset = Math.min(newOffset, Math.max(0, total - 1))
+        packages = upgrades.slice(offset, offset + pageSize)
+        screen = "list"
+    }
+
+    function showTab(name) {
+        tab = name
+        upgrades = []
+        loadList(0)
     }
 
     function openDetail(name) {
@@ -96,21 +129,29 @@ Rectangle {
         })
     }
 
-    function openPlan(name) {
-        request("plan", { names: [name] }, function (result) {
+    // method is plan, planRemove or planUpgrade; names is empty only for an upgrade of everything.
+    function openPlan(method, names) {
+        var from = screen
+        request(method, { names: names }, function (result) {
             plan = result
+            planFrom = from
             screen = "plan"
         })
     }
 
-    function startInstall() {
+    function startJob() {
+        jobAction = plan.action
         jobPackages = plan.requested
         jobMessage = "Starting…"
         jobIndex = 0
         jobTotal = 0
         jobResult = null
         screen = "progress"
-        request("install", { names: plan.requested }, function () {})
+        request(plan.action, { names: plan.requested }, function () {})
+    }
+
+    function describe(names) {
+        return names.length > 0 ? names.join(", ") : "everything"
     }
 
     function showJob(events) {
@@ -123,7 +164,8 @@ Rectangle {
 
     function handleEvent(event) {
         if (event.kind === "started") {
-            jobPackages = event.packages
+            jobAction = event.action || "install"
+            jobPackages = event.packages || []
             jobResult = null
             screen = "progress"
         } else if (event.kind === "progress") {
@@ -248,19 +290,27 @@ Rectangle {
                 TapButton {
                     unit: root.unit
                     label: "All mods"
-                    inverted: !root.installedOnly
-                    onTapped: { root.installedOnly = false; root.loadList(0) }
+                    inverted: root.tab === "all"
+                    onTapped: root.showTab("all")
                 }
                 TapButton {
                     unit: root.unit
                     label: "Installed"
-                    inverted: root.installedOnly
-                    onTapped: { root.installedOnly = true; root.loadList(0) }
+                    inverted: root.tab === "installed"
+                    onTapped: root.showTab("installed")
+                }
+                TapButton {
+                    unit: root.unit
+                    label: "Updates"
+                    inverted: root.tab === "updates"
+                    onTapped: root.showTab("updates")
                 }
             }
             Text {
                 anchors { right: parent.right; rightMargin: 40 * unit; verticalCenter: tabs.verticalCenter }
-                text: root.busy ? "Loading…" : root.total + (root.total === 1 ? " mod" : " mods")
+                text: root.busy ? (root.tab === "updates" ? "Checking…" : "Loading…")
+                    : root.tab === "updates" ? root.total + (root.total === 1 ? " update" : " updates")
+                    : root.total + (root.total === 1 ? " mod" : " mods")
                 font.pixelSize: 30 * unit
                 color: "#444444"
             }
@@ -288,17 +338,17 @@ Rectangle {
                             elide: Text.ElideRight
                             font.pixelSize: 36 * root.unit
                             font.bold: true
-                            color: modelData.compatible || modelData.installed ? "black" : "#777777"
+                            color: root.tab === "updates" || modelData.compatible || modelData.installed ? "black" : "#777777"
                         }
                         Text {
                             id: rowState
                             anchors { right: parent.right; rightMargin: 40 * root.unit; baseline: rowName.baseline }
-                            text: modelData.installed ? "Installed" : modelData.compatible ? "" : "Not for this OS"
+                            text: root.tab === "updates" ? "" : modelData.installed ? "Installed" : modelData.compatible ? "" : "Not for this OS"
                             font.pixelSize: 28 * root.unit
                         }
                         Text {
                             anchors { left: parent.left; leftMargin: 40 * root.unit; right: parent.right; rightMargin: 40 * root.unit; top: rowName.bottom; topMargin: 6 * root.unit }
-                            text: modelData.description
+                            text: root.tab === "updates" ? (modelData.from ? modelData.from + "  →  " + modelData.to : "New: " + modelData.to) : modelData.description
                             elide: Text.ElideRight
                             maximumLineCount: 1
                             font.pixelSize: 28 * root.unit
@@ -306,7 +356,7 @@ Rectangle {
                         }
                         MouseArea {
                             anchors.fill: parent
-                            onClicked: root.openDetail(modelData.name)
+                            onClicked: root.tab === "updates" ? root.openPlan("planUpgrade", [modelData.name]) : root.openDetail(modelData.name)
                         }
                     }
                 }
@@ -314,7 +364,7 @@ Rectangle {
             Text {
                 visible: !root.busy && root.packages.length === 0 && root.errorText === ""
                 anchors.centerIn: parent
-                text: root.installedOnly ? "Nothing installed yet." : "The catalogue is empty."
+                text: root.tab === "updates" ? "Everything is up to date." : root.tab === "installed" ? "Nothing installed yet." : "The catalogue is empty."
                 font.pixelSize: 34 * unit
             }
 
@@ -329,9 +379,19 @@ Rectangle {
                     onTapped: root.loadList(Math.max(0, root.offset - root.pageSize))
                 }
                 Text {
+                    visible: !updateAll.visible
                     anchors.centerIn: parent
                     text: "Page " + (Math.floor(root.offset / root.pageSize) + 1) + " of " + Math.max(1, Math.ceil(root.total / root.pageSize))
                     font.pixelSize: 30 * unit
+                }
+                TapButton {
+                    id: updateAll
+                    anchors.centerIn: parent
+                    unit: root.unit
+                    visible: root.tab === "updates" && root.total > 0 && !root.busy
+                    label: "Update all…"
+                    inverted: true
+                    onTapped: root.openPlan("planUpgrade", [])
                 }
                 TapButton {
                     anchors { right: parent.right; rightMargin: 40 * unit }
@@ -400,6 +460,14 @@ Rectangle {
                     font.pixelSize: 30 * unit
                     font.bold: true
                 }
+                Text {
+                    width: parent.width
+                    visible: root.detail !== null && root.detail.installed && root.detail.protected
+                    text: "This app runs on it, so it can only be removed from a computer."
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 28 * unit
+                    color: "#444444"
+                }
             }
 
             Item {
@@ -418,7 +486,15 @@ Rectangle {
                     label: root.busy ? "Checking…" : "Install…"
                     inverted: true
                     enabled: root.detail !== null && root.detail.compatible && !root.busy
-                    onTapped: root.openPlan(root.detail.name)
+                    onTapped: root.openPlan("plan", [root.detail.name])
+                }
+                TapButton {
+                    anchors { right: parent.right; rightMargin: 40 * unit }
+                    unit: root.unit
+                    visible: root.detail !== null && root.detail.installed && !root.detail.protected
+                    label: root.busy ? "Checking…" : "Remove…"
+                    enabled: !root.busy
+                    onTapped: root.openPlan("planRemove", [root.detail.name])
                 }
             }
         }
@@ -430,6 +506,8 @@ Rectangle {
 
             readonly property bool blocked: root.plan !== null && !!root.plan.error
             readonly property bool nothing: root.plan !== null && !root.plan.error && root.plan.packages.length === 0
+            readonly property string action: root.plan ? root.plan.action : "install"
+            readonly property string verb: action === "remove" ? "Remove" : action === "upgrade" ? "Update" : "Install"
 
             Column {
                 anchors { top: parent.top; topMargin: 36 * unit; left: parent.left; right: parent.right; margins: 40 * unit }
@@ -437,9 +515,9 @@ Rectangle {
 
                 Text {
                     width: parent.width
-                    text: !root.plan ? "" : parent.parent.blocked ? "Cannot install " + root.plan.requested.join(", ")
+                    text: !root.plan ? "" : parent.parent.blocked ? "Cannot " + parent.parent.verb.toLowerCase() + " " + root.describe(root.plan.requested)
                         : parent.parent.nothing ? "Nothing to do"
-                        : "Install " + root.plan.requested.join(", ") + "?"
+                        : parent.parent.verb + " " + root.describe(root.plan.requested) + "?"
                     wrapMode: Text.Wrap
                     font.pixelSize: 44 * unit
                     font.bold: true
@@ -457,14 +535,15 @@ Rectangle {
                 Text {
                     width: parent.width
                     visible: parent.parent.nothing
-                    text: "Everything this needs is already installed."
+                    text: parent.parent.action === "upgrade" ? "Everything is up to date." : "Everything this needs is already installed."
                     wrapMode: Text.Wrap
                     font.pixelSize: 34 * unit
                 }
                 Text {
                     width: parent.width
                     visible: !parent.parent.blocked && !parent.parent.nothing
-                    text: !root.plan ? "" : "This will install or change " + root.plan.packages.length + (root.plan.packages.length === 1 ? " package:" : " packages:")
+                    text: !root.plan ? "" : (parent.parent.action === "remove" ? "This will remove " : parent.parent.action === "upgrade" ? "This will change " : "This will install or change ")
+                        + root.plan.packages.length + (root.plan.packages.length === 1 ? " package:" : " packages:")
                     font.pixelSize: 32 * unit
                 }
                 Text {
@@ -483,7 +562,11 @@ Rectangle {
                 Text {
                     width: parent.width
                     visible: !parent.parent.blocked && !parent.parent.nothing
-                    text: "The tablet needs Wi-Fi for the download. Steps that restart the reMarkable screen, such as rebuilding the hashtable, are not run by this app yet; it will tell you if one is left to do."
+                    text: parent.parent.action === "remove"
+                        ? "A removed mod may stay visible until xovi is restarted."
+                        : parent.parent.action === "upgrade"
+                        ? "The tablet needs Wi-Fi for the download. Updated mods take effect after xovi is restarted."
+                        : "The tablet needs Wi-Fi for the download. Steps that restart the reMarkable screen, such as rebuilding the hashtable, are not run by this app yet; it will tell you if one is left to do."
                     wrapMode: Text.Wrap
                     font.pixelSize: 28 * unit
                     color: "#444444"
@@ -497,15 +580,15 @@ Rectangle {
                     anchors { left: parent.left; leftMargin: 40 * unit }
                     unit: root.unit
                     label: parent.parent.blocked || parent.parent.nothing ? "Back" : "Cancel"
-                    onTapped: root.screen = "detail"
+                    onTapped: root.screen = root.planFrom
                 }
                 TapButton {
                     anchors { right: parent.right; rightMargin: 40 * unit }
                     unit: root.unit
                     visible: !parent.parent.blocked && !parent.parent.nothing
-                    label: "Install"
+                    label: parent.parent.verb
                     inverted: true
-                    onTapped: root.startInstall()
+                    onTapped: root.startJob()
                 }
             }
         }
@@ -517,6 +600,9 @@ Rectangle {
 
             readonly property bool done: root.jobResult !== null
             readonly property bool failed: done && !root.jobResult.success
+            readonly property var words: root.jobAction === "remove" ? ["Removing", "Removed", "Removal failed"]
+                : root.jobAction === "upgrade" ? ["Updating", "Updated", "Update failed"]
+                : ["Installing", "Installed", "Install failed"]
 
             Column {
                 anchors { top: parent.top; topMargin: 36 * unit; left: parent.left; right: parent.right; margins: 40 * unit }
@@ -524,8 +610,8 @@ Rectangle {
 
                 Text {
                     width: parent.width
-                    text: !parent.parent.done ? "Installing " + root.jobPackages.join(", ")
-                        : parent.parent.failed ? "Install failed" : "Installed " + root.jobPackages.join(", ")
+                    text: !parent.parent.done ? parent.parent.words[0] + " " + root.describe(root.jobPackages)
+                        : parent.parent.failed ? parent.parent.words[2] : parent.parent.words[1] + " " + root.describe(root.jobPackages)
                     wrapMode: Text.Wrap
                     font.pixelSize: 44 * unit
                     font.bold: true
@@ -542,7 +628,7 @@ Rectangle {
                 Text {
                     width: parent.width
                     visible: !parent.parent.done
-                    text: "You can close this screen. The install carries on, and this page shows where it got to when you come back."
+                    text: "You can close this screen. The work carries on, and this page shows where it got to when you come back."
                     wrapMode: Text.Wrap
                     font.pixelSize: 28 * unit
                     color: "#444444"
@@ -567,7 +653,7 @@ Rectangle {
                 Text {
                     width: parent.width
                     visible: parent.parent.done && !parent.parent.failed
-                    text: "Some mods only show up after xovi is restarted."
+                    text: "Some changes only show after xovi is restarted."
                     wrapMode: Text.Wrap
                     font.pixelSize: 28 * unit
                     color: "#444444"
@@ -580,7 +666,7 @@ Rectangle {
                 visible: parent.done
                 label: "Done"
                 inverted: true
-                onTapped: root.loadList(root.offset)
+                onTapped: { root.upgrades = []; root.loadList(root.tab === "updates" ? 0 : root.offset) }
             }
         }
     }

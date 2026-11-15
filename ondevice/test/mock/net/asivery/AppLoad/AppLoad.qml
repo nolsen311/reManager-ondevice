@@ -43,7 +43,7 @@ Item {
         case "job":
             reply(req.id, scenario === "running"
                 ? { running: true, events: [
-                    { seq: 1, kind: "started", packages: ["retaskable"] },
+                    { seq: 1, kind: "started", action: "install", packages: ["retaskable"] },
                     { seq: 2, kind: "progress", progress: { package: "retaskable", index: 0, total: 1, status: "installing", message: "Installing retaskable (1/1)…" } } ] }
                 : { running: false, events: [] })
             break
@@ -53,16 +53,31 @@ Item {
             break
         case "detail":
             var found = catalogue.filter(function (pkg) { return pkg.name === p.name })[0]
-            reply(req.id, Object.assign({ author: "jdkruzr", license: "GPL-3.0-only", url: "https://example.org", depends: ["appload"] }, found))
+            reply(req.id, Object.assign({ author: "jdkruzr", license: "GPL-3.0-only", url: "https://example.org", depends: ["appload"], protected: p.name === "appload" }, found))
             break
         case "plan":
             reply(req.id, scenario === "blocked"
-                ? { requested: p.names, packages: [], error: "ERROR: unable to select packages:\n  bluetooth-settings-1.2.0-r1:\n    breaks: world[remarkable-os<3.27]\n    satisfies: world[bluetooth-settings]" }
-                : { requested: p.names, packages: ["appload", "retaskable"], upgrades: { appload: "0.5.3-r2 -> 0.5.3-r3" } })
+                ? { action: "install", requested: p.names, packages: [], error: "ERROR: unable to select packages:\n  bluetooth-settings-1.2.0-r1:\n    breaks: world[remarkable-os<3.27]\n    satisfies: world[bluetooth-settings]" }
+                : { action: "install", requested: p.names, packages: ["appload", "retaskable"], upgrades: { appload: "0.5.3-r2 -> 0.5.3-r3" } })
+            break
+        case "planRemove":
+            reply(req.id, { action: "remove", requested: p.names, packages: p.names })
+            break
+        case "upgrades":
+            reply(req.id, [
+                { name: "appload", from: "0.5.3-r2", to: "0.5.3-r3" },
+                { name: "koreader", from: "2026.06.2-r0", to: "2026.07.1-r1" },
+                { name: "xovi", from: "0.3.2-r0", to: "0.3.3-r2" } ])
+            break
+        case "planUpgrade":
+            reply(req.id, { action: "upgrade", requested: p.names, packages: ["appload", "koreader", "xovi"],
+                upgrades: { appload: "0.5.3-r2 -> 0.5.3-r3", koreader: "2026.06.2-r0 -> 2026.07.1-r1", xovi: "0.3.2-r0 -> 0.3.3-r2" } })
             break
         case "install":
+        case "remove":
+        case "upgrade":
             reply(req.id, {})
-            event({ seq: 1, kind: "started", packages: p.names })
+            event({ seq: 1, kind: "started", action: req.method, packages: p.names })
             event({ seq: 2, kind: "progress", progress: { package: "retaskable", index: 1, total: 2, status: "installing", message: "Installing retaskable (2/2)…" } })
             break
         }
