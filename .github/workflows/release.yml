@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: release
@@ -120,26 +120,10 @@ jobs:
             "
           echo "SITE=$site" >> "$GITHUB_ENV"
 
-      - name: Add the public key and instructions to the site
-        env:
-          PKGVER: ${{ steps.version.outputs.pkgver }}
-          PKGREL: ${{ steps.version.outputs.pkgrel }}
+      - name: Add the public key
         run: |
           cp "$HOME/.config/vbuild/$KEY_NAME.rsa.pub" "$SITE/"
-          fingerprint=$(openssl rsa -pubin -in "$SITE/$KEY_NAME.rsa.pub" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
-          base="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}"
-          cat > "$SITE/index.html" <<HTML
-          <!doctype html>
-          <meta charset="utf-8">
-          <title>reManager on-device packages</title>
-          <h1>reManager on-device packages</h1>
-          <p>An apk package repository for Vellum, holding remanager-ondevice $PKGVER-r$PKGREL for $ARCH.</p>
-          <p>Repository: <code>$base</code></p>
-          <p>Signing key: <a href="$KEY_NAME.rsa.pub">$KEY_NAME.rsa.pub</a>, SHA-256 of its DER form: <code>$fingerprint</code></p>
-          <p>Source: <a href="https://github.com/$GITHUB_REPOSITORY">github.com/$GITHUB_REPOSITORY</a>, see ondevice/README.md.</p>
-          HTML
-          sed -i 's/^          //' "$SITE/index.html"
-          echo "Key fingerprint: $fingerprint" >> "$GITHUB_STEP_SUMMARY"
+          echo "Key fingerprint: $(openssl rsa -pubin -in "$SITE/$KEY_NAME.rsa.pub" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
           find "$SITE" -type f | sort >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
@@ -147,21 +131,24 @@ jobs:
           name: remanager-ondevice-${{ steps.version.outputs.pkgver }}-r${{ steps.version.outputs.pkgrel }}
           path: ${{ env.SITE }}
 
-      - uses: actions/upload-pages-artifact@v3
+      # The release keeps the published files, so the site can be rebuilt for a docs change without rebuilding a package.
+      - name: Attach the package, index and key to the release
         if: github.ref_type == 'tag'
-        with:
-          path: ${{ env.SITE }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "reManager on-device ${GITHUB_REF_NAME#v}" --notes "Built from $GITHUB_REF_NAME."
+          fi
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$SITE/$ARCH/"*.apk "$SITE/$ARCH/APKINDEX.tar.gz" "$SITE/$KEY_NAME.rsa.pub"
 
-  publish:
+  site:
     needs: build
     if: github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/pages.yml
     permissions:
+      contents: read
       pages: write
       id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - id: deploy
-        uses: actions/deploy-pages@v4

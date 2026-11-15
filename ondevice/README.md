@@ -8,6 +8,13 @@ reusing its Go backend with a new e-ink interface.
 Only tried on the **reMarkable Paper Pro Move**. Other models are refused
 unless the backend is started with `--allow-untested`.
 
+## Installing
+
+Install it with Vellum from this project's package repository. The commands
+for Linux, macOS and Windows, and the signing key with its fingerprint, are
+at <https://nolsen311.github.io/reManager-ondevice/>. After that, updates
+appear in the app's own Updates tab.
+
 ## What it does
 
 - **All mods**: the Vellum catalogue, eight to a page. Mods that cannot be
@@ -55,8 +62,10 @@ ondevice/build.sh
 ```
 
 Needs Go and Qt 6's `rcc`. The app folder is written to
-`ondevice/output/remanager`; copy it to `/home/root/xovi/exthome/appload/` on
-the tablet. The design notes are in `docs/on-device/design.md`.
+`ondevice/output/remanager`; for testing, copy it to
+`/home/root/xovi/exthome/appload/` on the tablet. The install page is
+`ondevice/site/index.html`. The design notes are in
+`docs/on-device/design.md`.
 
 ## Licence
 

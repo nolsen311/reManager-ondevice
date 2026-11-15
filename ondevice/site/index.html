@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reManager on-device</title>
+<meta name="description" content="Install reManager on-device, an AppLoad app for managing Vellum mods on the reMarkable Paper Pro Move.">
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #555555;
+    --rule: #d0d0d0;
+    --code-bg: #f3f3f1;
+    --accent: #1a1a1a;
+    --note-bg: #f7f6f2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161616;
+      --fg: #e8e8e6;
+      --muted: #a8a8a4;
+      --rule: #3a3a3a;
+      --code-bg: #232323;
+      --accent: #e8e8e6;
+      --note-bg: #1f1f1d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 17px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; padding: 2.5rem 16px 4rem; }
+  h1 { font-size: 2rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.35rem; margin: 2.5rem 0 .5rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+  h3 { font-size: 1.05rem; margin: 1.5rem 0 .4rem; }
+  p, li { max-width: 40rem; }
+  .lede { color: var(--muted); margin-top: 0; }
+  code { font: .9em/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); padding: .1em .3em; border-radius: 3px; overflow-wrap: anywhere; }
+  pre { background: var(--code-bg); padding: .9rem 1rem; border-radius: 6px; overflow-x: auto; margin: .5rem 0 1rem; }
+  pre code { background: none; padding: 0; overflow-wrap: normal; }
+  .note { background: var(--note-bg); border-left: 3px solid var(--accent); padding: .6rem 1rem; margin: 1rem 0; }
+  .facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .25rem 1rem; margin: 1rem 0; }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  @media (max-width: 560px) {
+    .facts { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    .facts dd { margin-bottom: .6rem; }
+  }
+  nav.platforms { display: flex; gap: .5rem; flex-wrap: wrap; margin: .75rem 0 0; }
+  nav.platforms a { border: 1px solid var(--rule); border-radius: 6px; padding: .3rem .8rem; color: var(--fg); text-decoration: none; }
+  nav.platforms a:hover { border-color: var(--accent); }
+  a { color: var(--fg); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>reManager on-device</h1>
+<p class="lede">An AppLoad app for browsing, installing, updating and removing Vellum mods on the reMarkable itself, without a computer.</p>
+
+<dl class="facts">
+  <dt>Version</dt><dd>@VERSION@</dd>
+  <dt>Tablet</dt><dd>reMarkable Paper Pro Move only</dd>
+  <dt>Repository</dt><dd><code>@REPO_URL@</code></dd>
+  <dt>Signing key</dt><dd><a href="remanager-ondevice.rsa.pub">remanager-ondevice.rsa.pub</a></dd>
+  <dt>Key fingerprint</dt><dd><code>@FINGERPRINT@</code><br><small>SHA-256 of the key's DER form. The same key is in the source repository at <code>packaging/keys/</code>.</small></dd>
+  <dt>Source</dt><dd><a href="https://github.com/@REPO@">github.com/@REPO@</a></dd>
+</dl>
+
+<h2 id="before">Before you start</h2>
+<ul>
+  <li><strong>A reMarkable Paper Pro Move.</strong> The app refuses other models.</li>
+  <li><strong>Developer mode on</strong>, so the tablet accepts SSH. Turning it on resets the tablet; see <a href="https://developer.remarkable.com/documentation/developer-mode">reMarkable's developer mode guide</a>, which also says where the tablet shows its SSH password.</li>
+  <li><strong>Vellum, xovi and AppLoad already installed</strong>, for example with desktop <a href="https://github.com/rmitchellscott/reManager">reManager</a>. The app runs inside AppLoad.</li>
+  <li><strong>The tablet on Wi-Fi</strong>, so Vellum can download the package.</li>
+  <li><strong>The tablet's address.</strong> Over a USB cable it is <code>10.11.99.1</code>; over Wi-Fi, use its Wi-Fi address instead.</li>
+</ul>
+
+<p>Each set of commands below does the same four things: download the signing key, show its fingerprint so you can compare it with the one above, copy the key to the tablet, and add this repository to Vellum and install the app. Run them on your computer, not the tablet. They ask for the tablet's SSH password.</p>
+
+<nav class="platforms" aria-label="Platforms">
+  <a href="#linux">Linux</a>
+  <a href="#macos">macOS</a>
+  <a href="#windows">Windows</a>
+</nav>
+
+<h2 id="linux">Linux</h2>
+<p>In a terminal. Needs <code>curl</code>, <code>openssl</code>, <code>ssh</code> and <code>scp</code>, which most distributions include.</p>
+<pre><code>TABLET=10.11.99.1
+curl -fsSLO @REPO_URL@/remanager-ondevice.rsa.pub
+openssl rsa -pubin -in remanager-ondevice.rsa.pub -outform DER | openssl dgst -sha256</code></pre>
+<p>Check that the printed fingerprint matches the one above, then:</p>
+<pre><code>scp remanager-ondevice.rsa.pub root@$TABLET:/home/root/.vellum/etc/apk/keys/
+ssh root@$TABLET 'R=@REPO_URL@; F=/home/root/.vellum/etc/apk/repositories; grep -qxF $R $F || echo $R &gt;&gt; $F; /home/root/.vellum/bin/vellum update &amp;&amp; /home/root/.vellum/bin/vellum add remanager-ondevice'</code></pre>
+
+<h2 id="macos">macOS</h2>
+<p>In Terminal. <code>curl</code>, <code>openssl</code>, <code>ssh</code> and <code>scp</code> come with macOS.</p>
+<pre><code>TABLET=10.11.99.1
+curl -fsSLO @REPO_URL@/remanager-ondevice.rsa.pub
+openssl rsa -pubin -in remanager-ondevice.rsa.pub -outform DER | openssl dgst -sha256</code></pre>
+<p>Check that the printed fingerprint matches the one above, then:</p>
+<pre><code>scp remanager-ondevice.rsa.pub root@$TABLET:/home/root/.vellum/etc/apk/keys/
+ssh root@$TABLET 'R=@REPO_URL@; F=/home/root/.vellum/etc/apk/repositories; grep -qxF $R $F || echo $R &gt;&gt; $F; /home/root/.vellum/bin/vellum update &amp;&amp; /home/root/.vellum/bin/vellum add remanager-ondevice'</code></pre>
+
+<h2 id="windows">Windows</h2>
+<p>In PowerShell. Windows 10 and 11 include <code>curl.exe</code>, <code>ssh</code> and <code>scp</code>; if <code>ssh</code> is missing, add <em>OpenSSH Client</em> under Settings, Apps, Optional features.</p>
+<pre><code>$Tablet = "10.11.99.1"
+curl.exe -fsSLO @REPO_URL@/remanager-ondevice.rsa.pub
+$body = (Get-Content remanager-ondevice.rsa.pub | Where-Object { $_ -notmatch '^-----' }) -join ''
+[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Convert]::FromBase64String($body))).Replace('-','').ToLower()</code></pre>
+<p>Check that the printed fingerprint matches the one above, then:</p>
+<pre><code>scp remanager-ondevice.rsa.pub "root@${Tablet}:/home/root/.vellum/etc/apk/keys/"
+ssh "root@$Tablet" 'R=@REPO_URL@; F=/home/root/.vellum/etc/apk/repositories; grep -qxF $R $F || echo $R &gt;&gt; $F; /home/root/.vellum/bin/vellum update &amp;&amp; /home/root/.vellum/bin/vellum add remanager-ondevice'</code></pre>
+
+<h2 id="after">After installing</h2>
+<p>Restart the reMarkable UI with mods, for example with a triple-press of the power button if tripletap is installed. AppLoad only picks up a new app on a restart. Then open AppLoad from the sidebar and start reManager.</p>
+<p>The commands are safe to run again: they replace the key and add the repository line only once.</p>
+
+<h2 id="updating">Updating</h2>
+<p>New versions appear in the app's own <strong>Updates</strong> tab, like any other mod. Close and reopen the app after updating it; the version in its header changes.</p>
+
+<h2 id="removing">Removing</h2>
+<p>The app will not remove itself. From a computer (on Windows, use <code>"root@$Tablet"</code> as above):</p>
+<pre><code>ssh root@$TABLET '/home/root/.vellum/bin/vellum del remanager-ondevice; sed -i /reManager-ondevice/d /home/root/.vellum/etc/apk/repositories; rm -f /home/root/.vellum/etc/apk/keys/remanager-ondevice.rsa.pub'</code></pre>
+
+<h2 id="help">If something goes wrong</h2>
+<ul>
+  <li><strong>"HTTP 404" or "unavailable" during <code>vellum update</code>:</strong> the address in the repository list is mistyped, or a release is still being published. Wait a few minutes and run the commands again.</li>
+  <li><strong>"UNTRUSTED signature":</strong> the key is not in <code>/home/root/.vellum/etc/apk/keys/</code> under the name <code>remanager-ondevice.rsa.pub</code>.</li>
+  <li><strong>The app says the tablet is offline:</strong> check Wi-Fi and airplane mode. An app such as KOReader can turn Wi-Fi on under airplane mode, and restarting the reMarkable UI turns it off again.</li>
+  <li><strong>The reMarkable UI does not come back:</strong> hold the power button to restart the tablet. xovi never starts at boot, so the tablet always comes back with the stock UI.</li>
+</ul>
+
+<p class="note">reManager on-device is a fork of <a href="https://github.com/rmitchellscott/reManager">reManager</a> by Mitchell Scott, reusing its Go backend with a new e-ink interface. It is not part of Vellum's catalogue and is not supported by reMarkable. GPL-3.0.</p>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,103 @@
+# Publishes the install page and the package repository on GitHub Pages. The
+# packages come from the latest release's files and the page from
+# ondevice/site/index.html, so a docs change republishes the page without
+# rebuilding a package. Runs after each release, on docs changes on main, and
+# by hand.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ondevice/site/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  KEY_NAME: remanager-ondevice
+  ARCH: aarch64
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.files.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Fetch the latest release's files
+        id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          site="$RUNNER_TEMP/site"
+          mkdir -p "$site/$ARCH"
+          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/release" \
+            --pattern '*.apk' --pattern APKINDEX.tar.gz --pattern "$KEY_NAME.rsa.pub" || true
+          if ! ls "$RUNNER_TEMP/release/"*.apk > /dev/null 2>&1 || [ ! -f "$RUNNER_TEMP/release/APKINDEX.tar.gz" ]; then
+            # Publishing without them would empty the repository tablets install from.
+            echo "::warning::Release $tag has no package files attached, so the site was not published."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mv "$RUNNER_TEMP/release/"*.apk "$RUNNER_TEMP/release/APKINDEX.tar.gz" "$site/$ARCH/"
+          # Tablets trust the committed key; a release signed with another must not be published.
+          if ! cmp -s "$RUNNER_TEMP/release/$KEY_NAME.rsa.pub" "packaging/keys/$KEY_NAME.rsa.pub"; then
+            echo "::error::Release $tag's key differs from packaging/keys/$KEY_NAME.rsa.pub"
+            exit 1
+          fi
+          cp "packaging/keys/$KEY_NAME.rsa.pub" "$site/"
+          version=$(ls "$site/$ARCH/"*.apk | sed -n "s|.*/remanager-ondevice-\(.*\)\.apk|\1|p" | head -n 1)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "SITE=$site" >> "$GITHUB_ENV"
+
+      - name: Fill in the install page
+        if: steps.files.outputs.ready == 'true'
+        env:
+          VERSION: ${{ steps.files.outputs.version }}
+        run: |
+          fingerprint=$(openssl rsa -pubin -in "$SITE/$KEY_NAME.rsa.pub" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
+          repo_url="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}"
+          sed -e "s|@VERSION@|$VERSION|g" -e "s|@FINGERPRINT@|$fingerprint|g" \
+              -e "s|@REPO_URL@|$repo_url|g" -e "s|@REPO@|$GITHUB_REPOSITORY|g" \
+              ondevice/site/index.html > "$SITE/index.html"
+          if grep -n '@[A-Z_]*@' "$SITE/index.html"; then
+            echo "::error::Placeholders left in the page"; exit 1
+          fi
+          {
+            echo "Version: $VERSION"
+            echo "Key fingerprint: $fingerprint"
+            find "$SITE" -type f | sort
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.files.outputs.ready == 'true'
+        with:
+          path: ${{ env.SITE }}
+
+  deploy:
+    needs: assemble
+    if: needs.assemble.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
