@@ -31,6 +31,7 @@ Rectangle {
     property var device: null
     property string tab: "all"   // all, installed, updates, system
     property var system: ({ canRestart: false, canRebuild: false })
+    property var checks: []
     // The system job the confirm screen is asking about: restart or rebuild-hashtable.
     property string confirmAction: ""
     property int offset: 0
@@ -171,6 +172,20 @@ Rectangle {
         onTriggered: root.countMatches()
     }
 
+    function loadChecks() {
+        checks = []
+        request("checks", {}, function (result) { checks = result })
+    }
+
+    function fixCheck(fix) {
+        if (fix === "rebuild-hashtable")
+            confirmSystem("rebuild-hashtable")
+        else if (fix === "resume-tripletap")
+            request("resumeTripletap", {}, function () { loadChecks() })
+        else if (fix === "install-tripletap")
+            openPlan("plan", ["tripletap"])
+    }
+
     function confirmSystem(action) {
         confirmAction = action
         screen = "confirm"
@@ -230,6 +245,7 @@ Rectangle {
             total = 0
             screen = "list"
             request("system", {}, function (result) { system = result })
+            loadChecks()
             return
         }
         loadList(0)
@@ -443,47 +459,93 @@ Rectangle {
 
             Column {
                 visible: root.tab === "system"
-                anchors { top: tabs.bottom; topMargin: 48 * unit; left: parent.left; right: parent.right; leftMargin: 40 * unit; rightMargin: 40 * unit }
-                spacing: 28 * unit
+                anchors { top: tabs.bottom; topMargin: 36 * unit; left: parent.left; right: parent.right; leftMargin: 40 * unit; rightMargin: 40 * unit }
+                spacing: 20 * unit
 
                 Text {
-                    width: parent.width
-                    text: "Restart with mods"
+                    text: "Status"
+                    font.pixelSize: 38 * unit
+                    font.bold: true
+                }
+                Text {
+                    visible: root.checks.length === 0
+                    text: root.busy ? "Checking…" : "Nothing to report."
+                    font.pixelSize: 30 * unit
+                    color: "#444444"
+                }
+                Repeater {
+                    model: root.checks
+                    delegate: Item {
+                        width: parent.width
+                        height: Math.max(checkText.implicitHeight, fixButton.visible ? fixButton.height : 0) + 12 * root.unit
+
+                        Text {
+                            id: checkMark
+                            anchors { left: parent.left; top: parent.top }
+                            text: modelData.ok ? "✓" : "!"
+                            font.pixelSize: 34 * root.unit
+                            font.bold: true
+                            width: 44 * root.unit
+                        }
+                        Column {
+                            id: checkText
+                            anchors { left: checkMark.right; right: fixButton.visible ? fixButton.left : parent.right; rightMargin: 20 * root.unit; top: parent.top }
+                            spacing: 4 * root.unit
+                            Text {
+                                width: parent.width
+                                text: modelData.title
+                                wrapMode: Text.Wrap
+                                font.pixelSize: 32 * root.unit
+                                font.bold: !modelData.ok
+                            }
+                            Text {
+                                width: parent.width
+                                visible: !!modelData.detail
+                                text: modelData.detail || ""
+                                wrapMode: Text.Wrap
+                                font.pixelSize: 26 * root.unit
+                                color: "#444444"
+                            }
+                        }
+                        SmallButton {
+                            id: fixButton
+                            anchors { right: parent.right; top: parent.top }
+                            visible: !!modelData.fix
+                            unit: root.unit
+                            enabled: !root.busy
+                            label: modelData.fix === "rebuild-hashtable" ? "Rebuild…" : modelData.fix === "resume-tripletap" ? "Turn on" : "Install…"
+                            onTapped: root.fixCheck(modelData.fix)
+                        }
+                    }
+                }
+
+                Item { width: 1; height: 16 * root.unit }
+                Text {
+                    text: "Actions"
                     font.pixelSize: 38 * unit
                     font.bold: true
                 }
                 Text {
                     width: parent.width
-                    text: "Restarts the reMarkable UI with xovi, so installed, removed or updated mods take effect. This app closes while it happens."
+                    text: "Both restart the reMarkable UI, and this app closes while they run. Restart applies mod changes; rebuild the hashtable after an OS update, or when a mod asks for it."
                     wrapMode: Text.Wrap
-                    font.pixelSize: 30 * unit
+                    font.pixelSize: 28 * unit
+                    color: "#444444"
                 }
-                TapButton {
-                    unit: root.unit
-                    label: "Restart…"
-                    enabled: root.system.canRestart && !root.busy
-                    onTapped: root.confirmSystem("restart")
-                }
-                Item { width: 1; height: 24 * root.unit }
-                Text {
-                    width: parent.width
-                    text: "Rebuild hashtable"
-                    font.pixelSize: 38 * unit
-                    font.bold: true
-                }
-                Text {
-                    width: parent.width
-                    text: root.system.canRebuild
-                        ? "UI mods find parts of the reMarkable interface through the hashtable. Rebuild it after an OS update, or when a mod asks for it. Takes one to two minutes and restarts the screen twice."
-                        : "Needs qt-resource-rebuilder, which is not installed."
-                    wrapMode: Text.Wrap
-                    font.pixelSize: 30 * unit
-                }
-                TapButton {
-                    unit: root.unit
-                    label: "Rebuild…"
-                    enabled: root.system.canRebuild && !root.busy
-                    onTapped: root.confirmSystem("rebuild-hashtable")
+                Row {
+                    spacing: 20 * root.unit
+                    TapButton {
+                        unit: root.unit
+                        label: "Restart…"
+                        enabled: root.system.canRestart && !root.busy
+                        onTapped: root.confirmSystem("restart")
+                    }
+                    TapButton {
+                        unit: root.unit
+                        label: "Rebuild hashtable…"
+                        enabled: root.system.canRebuild && !root.busy
+                        onTapped: root.confirmSystem("rebuild-hashtable")
+                    }
                 }
             }
 

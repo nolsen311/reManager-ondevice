@@ -82,6 +82,13 @@ Item {
             reply(req.id, { action: "upgrade", requested: p.names, packages: ["appload", "koreader", "xovi"],
                 upgrades: { appload: "0.5.3-r2 -> 0.5.3-r3", koreader: "2026.06.2-r0 -> 2026.07.1-r1", xovi: "0.3.2-r0 -> 0.3.3-r2" } })
             break
+        case "checks":
+            reply(req.id, [
+                { id: "hashtable", ok: false, title: "The hashtable is for another OS version", detail: "Built for 3.26.0.68; this is 3.27.3.0. UI mods may not work until it is rebuilt.", fix: "rebuild-hashtable" },
+                { id: "tripletap", ok: false, title: "Triple-tap is paused", detail: "A hashtable rebuild paused it and did not turn it back on.", fix: "resume-tripletap" },
+                { id: "auto-updates", ok: false, title: "Automatic OS updates are on", detail: "An OS update stops mods until each supports the new version and the hashtable is rebuilt. Fixing this changes system files, which this app does not do. Use desktop reManager." },
+                { id: "vellum-ok", ok: true, title: "The hashtable matches OS 3.27.3.0" } ])
+            break
         case "system":
             reply(req.id, { canRestart: true, canRebuild: true })
             break

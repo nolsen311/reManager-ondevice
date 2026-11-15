@@ -228,7 +228,7 @@ not come back within a set time after an install.
 | Backup and restore | Drop for now | A backup kept on the same tablet is not a backup. |
 | Settings sync, support bundle upload, demo mode | Drop | Desktop concerns. |
 | App self-update | Rework | Through Vellum, as a package. |
-| Status checks and one-click fixes | Later | Limited by consequence 2 above. |
+| Status checks and one-click fixes | Built, partly | See "Status checks" below. |
 | Auto-update toggle, timezone, start and stop mods, mod commands | Later | Small once the local executor exists. |
 | Sleep screen from a PNG | Later, reworked | Pick from files already on the tablet. |
 | Local file browser, configuration editor | Later, maybe | Editing text on e-ink is poor. |
@@ -389,6 +389,16 @@ ondevice/manifest.json          AppLoad manifest
 - The app's own package (`remanager-ondevice`) is protected from removal
   from inside the app, like the packages it runs on. Updating it is allowed;
   the new version loads the next time the app opens.
+- Status checks (System tab), each left out when it cannot be read:
+  hashtable missing or built for another OS version (fix: rebuild);
+  tripletap not installed (fix: install it through the usual plan) or left
+  paused by a rebuild (fix: turn it on); automatic OS updates on; OS changed
+  since Vellum last ran or `vellum reenable` needed; Vellum missing core
+  packages. The last three are reported only: fixing them writes to the root
+  partition, which this app does not do. Desktop checks left out: xovi and
+  launcher state (this app only runs under xovi), timezone (compared against
+  a computer's saved setting), and mods incompatible with the next OS
+  release (needs the OS release feed; a candidate for later).
 - `ondevice/build.sh` builds the app folder (manifest, icon, `resources.rcc`,
   `backend/entry`) into `ondevice/output/remanager`.
 
