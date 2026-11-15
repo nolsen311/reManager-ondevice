@@ -310,8 +310,14 @@ ondevice/manifest.json          AppLoad manifest
   and progress. Plan and progress serve install, remove and update alike. It is black on white with no animation, and every size is a
   fraction of the width so it fits a window as well as the full screen.
 - It uses only `QtQuick` and AppLoad's endpoint, not Qt Quick Controls.
-- The frontend waits for a "ready" message (type 4) before its first
-  request, because AppLoad drops messages sent before the backend connects.
+- AppLoad drops messages sent while the backend is not connected. The
+  frontend first relied on a single "ready" message (type 4); on the Move,
+  every second launch missed it and showed "the backend did not start",
+  though requests then worked. The cause inside AppLoad is not known. The
+  frontend now also asks the backend for the device every 0.7 s until it
+  answers. It treats "ready" as a hint to ask at once, and it gives up on a
+  request with no reply after 30 s (3 min for index refreshes and solves)
+  instead of staying busy.
 - There is no search yet: it needs an on-screen keyboard.
 - Closing the app stops the backend. A running install is in its own worker
   and carries on.

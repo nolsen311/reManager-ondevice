@@ -26,6 +26,19 @@ Window {
         return null
     }
 
+    // Long enough for the screen's probes to get past the dropped ones.
+    function wait(then) {
+        waitTimer.then = then
+        waitTimer.start()
+    }
+
+    Timer {
+        id: waitTimer
+        property var then
+        interval: 2500
+        onTriggered: then()
+    }
+
     function shoot(name, then) {
         loader.item.grabToImage(function (result) {
             result.saveToFile(outDir + "/" + name + ".png")
@@ -34,6 +47,7 @@ Window {
     }
 
     readonly property var steps: [
+        function (next) { wait(next) },
         function (next) { shoot("01-list", next) },
         function (next) { loader.item.showTab("installed"); next() },
         function (next) { shoot("02-installed", next) },

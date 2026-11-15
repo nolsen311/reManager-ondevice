@@ -34,6 +34,10 @@ Item {
     }
 
     function sendMessage(type, contents) {
+        if (dropFirst > 0) {
+            dropFirst--
+            return
+        }
         var req = JSON.parse(contents)
         var p = req.params || {}
         switch (req.method) {
@@ -87,5 +91,8 @@ Item {
         event({ seq: 3, kind: "done", result: result })
     }
 
-    Component.onCompleted: Qt.callLater(function () { mock.messageReceived(4, "") })
+    // Like AppLoad on a second launch: no "ready" reaches the screen, and the first requests are dropped as if the backend were not connected yet.
+    property int dropFirst: 2
+    property bool sendReady: false
+    Component.onCompleted: if (sendReady) Qt.callLater(function () { mock.messageReceived(4, "") })
 }

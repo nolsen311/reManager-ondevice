@@ -47,18 +47,56 @@ Rectangle {
     property var jobResult: null
 
     property int nextId: 1
+    // Requests waiting for a reply: id -> { callback, method, sentAt }.
     property var pending: ({})
+    property bool connected: false
+
+    // Requests that make Vellum refresh its index or solve may take a while; anything else that goes this long without a reply was lost.
+    function replyLimit(method) {
+        return method === "list" || method === "detail" || method === "job" || method === "device" ? 30000 : 180000
+    }
 
     function request(method, params, onResult) {
         var id = nextId++
-        pending[id] = onResult
+        pending[id] = { callback: onResult, method: method, sentAt: Date.now() }
         busy = true
         errorText = ""
         endpoint.sendMessage(msgRequest, JSON.stringify({ id: id, method: method, params: params || {} }))
     }
 
+    // AppLoad drops whatever is sent while the backend is not connected, and its "frontend attached" notice can arrive before this screen is listening, so the screen keeps asking until the backend answers. Probes use id 0 and are not tracked as pending.
+    function probe() {
+        endpoint.sendMessage(msgRequest, JSON.stringify({ id: 0, method: "device", params: {} }))
+    }
+
+    function checkReplies() {
+        var now = Date.now()
+        var lost = []
+        for (var id in pending) {
+            if (now - pending[id].sentAt > replyLimit(pending[id].method))
+                lost.push(id)
+        }
+        if (lost.length === 0)
+            return
+        for (var i = 0; i < lost.length; i++)
+            delete pending[lost[i]]
+        busy = Object.keys(pending).length > 0
+        errorText = "The backend did not answer. Try again, or close reManager and open it again."
+        if (screen === "starting")
+            screen = "list"
+    }
+
     function handleResponse(resp) {
-        var callback = pending[resp.id]
+        if (resp.id === 0) {
+            if (!connected && !resp.error) {
+                connected = true
+                device = resp.result
+                errorText = ""
+                start()
+            }
+            return
+        }
+        var entry = pending[resp.id]
         delete pending[resp.id]
         busy = Object.keys(pending).length > 0
         if (resp.error) {
@@ -67,14 +105,11 @@ Rectangle {
                 screen = "list"
             return
         }
-        if (callback)
-            callback(resp.result)
+        if (entry && entry.callback)
+            entry.callback(resp.result)
     }
 
     function start() {
-        if (device !== null)
-            return
-        request("device", {}, function (result) { device = result })
         request("job", {}, function (job) {
             if (job.running) {
                 showJob(job.events)
@@ -183,8 +218,8 @@ Rectangle {
         applicationID: "remanager"
         onMessageReceived: (type, contents) => {
             if (type === root.msgReady) {
-                startTimeout.stop()
-                root.start()
+                if (!root.connected)
+                    root.probe()
                 return
             }
             var data
@@ -201,17 +236,29 @@ Rectangle {
         }
     }
 
-    // The backend announces itself once it is connected; a request sent before that is dropped by AppLoad.
     Timer {
-        id: startTimeout
-        interval: 8000
-        running: true
+        interval: 700
+        repeat: true
+        triggeredOnStart: true
+        running: !root.connected
+        onTriggered: root.probe()
+    }
+
+    // Only a message, not a dead end: probing carries on, and the screen fills in if the backend answers later.
+    Timer {
+        interval: 10000
+        running: !root.connected
         onTriggered: {
-            if (root.device === null) {
-                root.errorText = "The backend did not start."
-                root.screen = "list"
-            }
+            root.errorText = "The backend has not answered yet. If this stays, close reManager and open it again."
+            root.screen = "list"
         }
+    }
+
+    Timer {
+        interval: 2000
+        repeat: true
+        running: root.busy
+        onTriggered: root.checkReplies()
     }
 
     // ---- header ----
@@ -561,7 +608,7 @@ Rectangle {
                 }
                 Text {
                     width: parent.width
-                    visible: !parent.parent.blocked && !parent.parent.nothing && root.plan.keep !== undefined && root.plan.keep.length > 0
+                    visible: !parent.parent.blocked && !parent.parent.nothing && root.plan !== null && !!root.plan.keep && root.plan.keep.length > 0
                     text: root.plan && root.plan.keep ? root.plan.keep.join(", ") + " will be recorded as installed by you, so the mods that need it keep it. Nothing else about it changes." : ""
                     wrapMode: Text.Wrap
                     font.pixelSize: 30 * unit
