@@ -18,6 +18,8 @@ type Catalog interface {
 	Ready() bool
 	GetAllPackagesForDevice(deviceType, firmware, arch string) []vellum.Package
 	ResolveVirtualChoices(requested, installed []string, deviceType, firmware, arch string) []vellum.VirtualChoice
+	// GetPackage looks a name up in the whole catalogue, whatever the device.
+	GetPackage(name string) *vellum.Package
 }
 
 // MaxPageSize keeps a page of packages well inside one AppLoad message.
@@ -30,6 +32,7 @@ type Service struct {
 	vellum   *vellum.Client
 	exec     executor.CommandExecutor
 	device   Device
+	extras   extrasCache
 	// rescue runs the steps that bring the reMarkable UI back. It must outlive a cancelled job, so in the app it has a context of its own.
 	rescue executor.CommandExecutor
 }
@@ -189,7 +192,8 @@ func (s *Service) catalogPackages() ([]vellum.Package, error) {
 			return nil, fmt.Errorf("could not load the package catalogue: %w", err)
 		}
 	}
-	return s.catalog.GetAllPackagesForDevice(string(s.device.Type), s.firmware(), s.device.PackageArch()), nil
+	catalogue := s.catalog.GetAllPackagesForDevice(string(s.device.Type), s.firmware(), s.device.PackageArch())
+	return append(catalogue, s.extraPackages(catalogue)...), nil
 }
 
 func summarize(pkg vellum.Package, installed map[string]string) PackageSummary {

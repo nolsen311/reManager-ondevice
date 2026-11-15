@@ -410,6 +410,14 @@ ondevice/manifest.json          AppLoad manifest
   launcher state (this app only runs under xovi), timezone (compared against
   a computer's saved setting), and mods incompatible with the next OS
   release (needs the OS release feed; a candidate for later).
+- Released: v0.1.0 (2026-11-15) built, signed and published by the
+  release workflow, and installed on the Move with `vellum add` from the
+  repository at `https://nolsen311.github.io/reManager-ondevice`.
+- Packages Vellum can install from repositories other than its own, such as
+  this app's, are not in the catalogue the lists come from. The backend
+  adds them from `vellum list --available` (newest version of each name)
+  and `vellum info -d`, cached for a minute. A name in the catalogue for
+  any device is not added; `-doc`, `-dev` and hidden packages are left out.
 - `ondevice/build.sh` builds the app folder (manifest, icon, `resources.rcc`,
   `backend/entry`) into `ondevice/output/remanager`.
 

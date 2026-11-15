@@ -722,7 +722,8 @@ Rectangle {
                     text: !root.detail ? "" : [
                         root.detail.author ? "By " + root.detail.author : "",
                         root.detail.license ? "Licence: " + root.detail.license : "",
-                        root.detail.category ? "Category: " + root.detail.category : ""
+                        root.detail.category === "another repository" ? "From a repository outside Vellum's catalogue"
+                            : root.detail.category ? "Category: " + root.detail.category : ""
                     ].filter(function (s) { return s !== "" }).join("   ·   ")
                     wrapMode: Text.Wrap
                     font.pixelSize: 28 * unit

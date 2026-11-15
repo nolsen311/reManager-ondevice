@@ -72,13 +72,15 @@ func (f *fakeTablet) ExecuteStreaming(cmd string, onOutput func(string)) error {
 }
 
 type fakeCatalog struct {
-	packages   []vellum.Package
-	choices    []vellum.VirtualChoice
-	ready      bool
-	refreshErr error
-	gotDevice  string
-	gotOS      string
-	gotArch    string
+	packages []vellum.Package
+	// otherDevices are in the catalogue but not in this device's list.
+	otherDevices []vellum.Package
+	choices      []vellum.VirtualChoice
+	ready        bool
+	refreshErr   error
+	gotDevice    string
+	gotOS        string
+	gotArch      string
 }
 
 func (c *fakeCatalog) Refresh() error {
@@ -92,6 +94,19 @@ func (c *fakeCatalog) Ready() bool { return c.ready }
 func (c *fakeCatalog) GetAllPackagesForDevice(deviceType, firmware, arch string) []vellum.Package {
 	c.gotDevice, c.gotOS, c.gotArch = deviceType, firmware, arch
 	return c.packages
+}
+func (c *fakeCatalog) GetPackage(name string) *vellum.Package {
+	for i := range c.packages {
+		if c.packages[i].Name == name {
+			return &c.packages[i]
+		}
+	}
+	for i := range c.otherDevices {
+		if c.otherDevices[i].Name == name {
+			return &c.otherDevices[i]
+		}
+	}
+	return nil
 }
 func (c *fakeCatalog) ResolveVirtualChoices(requested, installed []string, deviceType, firmware, arch string) []vellum.VirtualChoice {
 	return c.choices
