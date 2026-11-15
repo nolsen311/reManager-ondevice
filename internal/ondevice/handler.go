@@ -83,7 +83,7 @@ func (h *Handler) Serve(ctx context.Context, t Transport) error {
 			t.Send(MsgReady, "")
 			// A frontend that opens during a job, or after the stock UI restarted, picks the job back up.
 			if h.Jobs.Running() {
-				h.follow(ctx, t, 0)
+				h.resume(ctx, t)
 			}
 		case MsgRequest:
 			// Requests run one at a time: Vellum must not run twice at once, and the frontend shows one screen at a time.
@@ -114,7 +114,11 @@ func reply(t Transport, resp response) {
 	if err != nil {
 		data, _ = json.Marshal(response{ID: resp.ID, Error: "could not encode the reply: " + err.Error()})
 	}
-	t.Send(MsgResponse, string(data))
+	// A reply that cannot be sent, most often because it is too big for one message, would otherwise leave the frontend waiting.
+	if err := t.Send(MsgResponse, string(data)); err != nil {
+		fallback, _ := json.Marshal(response{ID: resp.ID, Error: fmt.Sprintf("the reply could not be sent (%d bytes): %v", len(data), err)})
+		t.Send(MsgResponse, string(fallback))
+	}
 }
 
 func (h *Handler) call(ctx context.Context, t Transport, req request) (any, error) {
@@ -185,6 +189,25 @@ func (h *Handler) call(ctx context.Context, t Transport, req request) (any, erro
 	default:
 		return nil, fmt.Errorf("unknown method %q", req.Method)
 	}
+}
+
+// resume brings a newly attached frontend up to date on a running job in brief, then follows it from there.
+func (h *Handler) resume(ctx context.Context, t Transport) {
+	events, err := h.Jobs.Events(0)
+	if err != nil {
+		return
+	}
+	after := 0
+	for _, e := range summarizeEvents(events) {
+		if data, err := json.Marshal(e); err == nil {
+			t.Send(MsgInstallEvent, string(data))
+		}
+		after = e.Seq
+	}
+	if len(events) > 0 {
+		after = events[len(events)-1].Seq
+	}
+	h.follow(ctx, t, after)
 }
 
 // follow forwards the job's events to the frontend in the background. One follower at a time, so an event is never sent twice.

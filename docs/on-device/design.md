@@ -316,7 +316,16 @@ ondevice/manifest.json          AppLoad manifest
   - Nothing can be drawn on the temporary UI: no mods are loaded while the
     hashtable is built.
   - Not yet known: whether a `daemon-reload` during a job also discards the
-    job's `ExecStopPost`. The worker's own restore does not depend on it. If the UI does not come
+    job's `ExecStopPost`. The worker's own restore does not depend on it.
+- The second rebuild on the Move worked and restored the hashtable. The app
+  then could not start: the rebuild had recorded about 3,000 lines of the
+  temporary UI's log, and the reply to `job` carried all of them. That is
+  far more than one packet on AppLoad's socket (208 KiB by default), so the
+  send failed and the frontend waited. Now `job` and the replay to a newly
+  attached frontend send a summary (start, latest progress, result), and
+  the full record stays on disk. A reply that cannot be sent is replaced by
+  a short error reply. Colour codes are stripped from recorded output, and
+  progress is flushed to disk at most once a second. If the UI does not come
   back, restarting the tablet brings back the stock UI (section 5).
 - Upgrades come from Vellum's own solver (`upgrade --simulate`) after an
   index refresh, for everything or for named packages. Upgrading the

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -30,6 +31,13 @@ const (
 	lockFile      = "job.lock"
 	maxOutputLine = 2000
 )
+
+// Colour codes in program output, such as xochitl's log lines.
+var terminalCodes = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
+
+func stripTerminalCodes(s string) string {
+	return terminalCodes.ReplaceAllString(s, "")
+}
 
 // Event is one line of the worker's record of a job.
 type Event struct {
@@ -197,18 +205,23 @@ func (j *Jobs) RunWorker(action string, names []string, run func(names []string,
 	defer f.Close()
 
 	seq := 0
+	var lastSync time.Time
 	write := func(e Event) {
 		seq++
 		e.Seq = seq
 		e.At = time.Now().Unix()
 		line, _ := json.Marshal(e)
 		f.Write(append(line, '\n'))
-		// The stock UI may be restarted, or the tablet rebooted, at any point in a job.
-		f.Sync()
+		// The stock UI may be restarted, or the tablet rebooted, at any point in a job, so the start and the result reach the disk at once. Progress can be chatty, so it is flushed at most once a second.
+		if e.Kind != EventProgress || time.Since(lastSync) > time.Second {
+			f.Sync()
+			lastSync = time.Now()
+		}
 	}
 
 	write(Event{Kind: EventStarted, Action: action, Packages: names})
 	result := run(names, func(p Progress) {
+		p.Message = stripTerminalCodes(p.Message)
 		if len(p.Message) > maxOutputLine {
 			p.Message = p.Message[:maxOutputLine]
 		}
@@ -248,10 +261,32 @@ func (j *Jobs) Events(after int) ([]Event, error) {
 	return events, scanner.Err()
 }
 
+// Status returns the last job in brief: its start, its latest progress and its result. The full record can run to thousands of lines (a hashtable rebuild records everything the temporary UI prints), far more than one AppLoad message carries.
 func (j *Jobs) Status() (JobStatus, error) {
 	running := j.Running()
 	events, err := j.Events(0)
-	return JobStatus{Running: running, Events: events}, err
+	return JobStatus{Running: running, Events: summarizeEvents(events)}, err
+}
+
+func summarizeEvents(events []Event) []Event {
+	var started, progress, done *Event
+	for i := range events {
+		switch events[i].Kind {
+		case EventStarted:
+			started = &events[i]
+		case EventProgress:
+			progress = &events[i]
+		case EventDone:
+			done = &events[i]
+		}
+	}
+	summary := []Event{}
+	for _, e := range []*Event{started, progress, done} {
+		if e != nil {
+			summary = append(summary, *e)
+		}
+	}
+	return summary
 }
 
 // Follow reports events after the given sequence number as the worker records them, and returns when the job is done, the worker has gone, or ctx ends.

@@ -403,3 +403,95 @@ func TestSystemdRunArgs(t *testing.T) {
 		t.Errorf("restart args = %s", restart)
 	}
 }
+
+// limitedFrontend refuses messages above the size of one packet on AppLoad's socket, as the kernel does.
+type limitedFrontend struct {
+	*fakeFrontend
+	limit int
+}
+
+func (f *limitedFrontend) Send(msgType int32, contents string) error {
+	if len(contents) > f.limit {
+		return errors.New("sendmsg: message too long")
+	}
+	return f.fakeFrontend.Send(msgType, contents)
+}
+
+// The rebuild on the Move recorded about 2,900 lines of the temporary UI's log, and the app then never got an answer to "job".
+func chattyJob(t *testing.T) *Jobs {
+	t.Helper()
+	jobs := &Jobs{Dir: t.TempDir()}
+	line := "17:45:57.837 \x1b[01;33mrm.epaperkeyboardhandler No keymap set by QT settings or firmware, defaulting to US.\x1b[0m"
+	err := jobs.RunWorker(ActionRebuildHashtable, nil, func(_ []string, onProgress func(Progress)) InstallResult {
+		for range 3000 {
+			onProgress(Progress{Package: "hashtable", Status: "installing", Message: line})
+		}
+		return InstallResult{Success: true}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return jobs
+}
+
+func TestStatusOfAChattyJobFitsInOneMessage(t *testing.T) {
+	jobs := chattyJob(t)
+
+	status, err := jobs.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(kinds(status.Events), ","); got != "started,progress,done" {
+		t.Errorf("events = %s, want a summary", got)
+	}
+	data, _ := json.Marshal(status)
+	if len(data) > 4096 {
+		t.Errorf("status is %d bytes", len(data))
+	}
+	if strings.Contains(string(data), `\u001b`) {
+		t.Errorf("colour codes should be stripped: %s", data)
+	}
+
+	all, _ := jobs.Events(0)
+	if len(all) != 3002 {
+		t.Errorf("the full record should still be kept, got %d events", len(all))
+	}
+}
+
+func TestHandlerAnswersJobAfterAChattyJob(t *testing.T) {
+	jobs := chattyJob(t)
+	h := &Handler{Service: newTestService(standardCatalog(), standardTablet()), Jobs: jobs}
+	f := &limitedFrontend{fakeFrontend: newFakeFrontend(), limit: 212992}
+	done := make(chan error, 1)
+	go func() { done <- h.Serve(context.Background(), f) }()
+	defer func() {
+		close(f.in)
+		<-done
+	}()
+
+	f.in <- appload.Message{Type: MsgRequest, Contents: `{"id":7,"method":"job"}`}
+	msg := f.next(t)
+	var resp struct {
+		ID     int       `json:"id"`
+		Result JobStatus `json:"result"`
+		Error  string    `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(msg.Contents), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.ID != 7 || resp.Error != "" || len(resp.Result.Events) != 3 {
+		t.Errorf("reply = %+v", resp)
+	}
+}
+
+func TestReplyTooBigToSendBecomesAnError(t *testing.T) {
+	f := &limitedFrontend{fakeFrontend: newFakeFrontend(), limit: 100}
+
+	reply(f, response{ID: 3, Result: strings.Repeat("x", 500)})
+
+	var resp response
+	json.Unmarshal([]byte(f.next(t).Contents), &resp)
+	if resp.ID != 3 || !strings.Contains(resp.Error, "could not be sent") {
+		t.Errorf("reply = %+v", resp)
+	}
+}
