@@ -282,6 +282,11 @@ ondevice/manifest.json          AppLoad manifest
   runs `vellum add <provider>`. That only records the provider as installed
   on purpose; it changes no package. If no installed provider, or more than
   one, matches, the removal is refused with Vellum's message.
+- Network failures (no DNS, no route, apk's "network error") reach the
+  screen led by a plain "the tablet seems to be offline" message. Found on
+  the Move: KOReader can turn Wi-Fi on while the reMarkable settings say
+  airplane mode, and restarting the reMarkable UI turns it off again, so
+  the app loses the network after a restart.
 - Restart and hashtable rebuild (System tab, and offered after an install
   that asks for a rebuild) also run in the worker, because both stop the
   stock UI and with it this app's backend. Restart runs `xovi/start` after
@@ -290,7 +295,7 @@ ondevice/manifest.json          AppLoad manifest
   manages the UI. Otherwise it runs `xovi/rebuild_hashtable` and then starts
   the UI with mods, even if the rebuild failed, since the rebuild leaves the
   UI stopped. The result is shown the next time the app opens, within ten
-  minutes. Neither has been run on the Move yet. If the UI does not come
+  minutes. Restart has worked on the Move; the rebuild has not been tried there yet. If the UI does not come
   back, restarting the tablet brings back the stock UI (section 5).
 - Upgrades come from Vellum's own solver (`upgrade --simulate`) after an
   index refresh, for everything or for named packages. Upgrading the
@@ -335,7 +340,8 @@ ondevice/manifest.json          AppLoad manifest
 - Closing the app stops the backend. A running install is in its own worker
   and carries on.
 - The icon (`ondevice/icon.svg`, rendered to `icon.png`) is the desktop
-  icon without its background, black on transparent.
+  icon without its background, black on transparent. AppLoad's Reload does
+  not pick up a changed icon; restarting the reMarkable UI does.
 - `ondevice/build.sh` builds the app folder (manifest, icon, `resources.rcc`,
   `backend/entry`) into `ondevice/output/remanager`.
 

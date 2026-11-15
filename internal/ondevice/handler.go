@@ -100,8 +100,11 @@ func (h *Handler) handle(ctx context.Context, t Transport, contents string) {
 	}
 	result, err := h.call(ctx, t, req)
 	if err != nil {
-		reply(t, response{ID: req.ID, Error: err.Error()})
+		reply(t, response{ID: req.ID, Error: withOfflineHint(err.Error())})
 		return
+	}
+	if plan, ok := result.(*Plan); ok {
+		plan.Error = withOfflineHint(plan.Error)
 	}
 	reply(t, response{ID: req.ID, Result: result})
 }

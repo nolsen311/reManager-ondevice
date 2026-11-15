@@ -202,6 +202,9 @@ func (j *Jobs) RunWorker(action string, names []string, run func(names []string,
 		}
 		write(Event{Kind: EventProgress, Progress: &p})
 	})
+	for i, message := range result.Errors {
+		result.Errors[i] = withOfflineHint(message)
+	}
 	write(Event{Kind: EventDone, Result: &result})
 	return nil
 }
