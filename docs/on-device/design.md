@@ -1,6 +1,7 @@
 # reManager on-device: design
 
-Status: draft, 2026-11-14. Nothing here has been run on a tablet yet.
+Status: draft. The backend's read-only commands have been run on the Move
+(section 8); installs and the UI have not.
 
 This fork turns reManager from a desktop app that drives a reMarkable over SSH
 into an app that runs on the tablet itself. Upstream is
@@ -68,9 +69,8 @@ but a message must fit in one packet of the socket's send buffer, so UI
 messages are kept to tens of kilobytes and long lists are sent in pages.
 `internal/appload` is a Go client for this, with tests.
 
-The tablet runs OS 3.27.3.0. The AppLoad release Vellum offers for 3.26 and
-3.27 is 0.5.3, so that is most likely what is installed; this is inferred, not
-read from the tablet. The protocol files are identical in 0.5.3 and 0.6.0.
+The tablet runs OS 3.27.3.0 and has AppLoad 0.5.3-r3 installed (read from
+the tablet). The protocol files are identical in 0.5.3 and 0.6.0.
 The `aspectRatio` and `width` keys for QML apps were added in 0.6.0, so the
 UI cannot rely on them and has to fit whatever size it is given.
 
@@ -170,7 +170,8 @@ These follow from the choice and shape the design.
    stock UI is expected to take the backend with it. An install therefore
    runs in its own systemd unit (`systemd-run`), writes a log and a result
    file under `/home/root`, and the UI reads that state when it comes back.
-   Whether `systemd-run` is present on the Move is not checked yet.
+   `systemd-run` is present on the Move at `/usr/bin/systemd-run`; starting
+   a worker with it has not been tried there yet.
 4. **Two UIs, one backend.** The Go packages stay shared with upstream so
    upstream fixes can be merged. On-device code goes in new directories and
    the Wails app keeps building.
@@ -285,14 +286,15 @@ Milestone 1, in order:
 1. `LocalExecutor` with tests. Done.
 2. Go AppLoad client with tests against a local socket. Done.
 3. Backend: list catalogue, list installed, simulate, install. Done, tested
-   against a fake tablet; not yet run on the Move.
+   against a fake tablet. On the Move (2026-11-15, OS 3.27.3.0): model
+   detection, `installed` and `plan` of an already-installed package work.
+   Not yet run there: a plan that would install something, `install`, and
+   the systemd worker.
 4. QML: package list, package detail, confirm, progress.
 5. First run on the Move, after the rehearsal in section 5.
 
 Open questions:
 
-- Which AppLoad version is installed? (`vellum info appload`)
-- Is `systemd-run` available on the Move?
 - What does official software recovery do to documents on the Move?
 
 ## 9. Sources
