@@ -1,0 +1,161 @@
+# Builds reManager's on-tablet app as a Vellum (apk) package and publishes it,
+# with a signed index and the public key, as a package repository on GitHub
+# Pages. A tag ondevice-v<version> builds, signs and publishes. A manual run
+# builds with a throwaway key and publishes nothing, to test a branch.
+name: On-device package
+
+on:
+  push:
+    tags: ['ondevice-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ondevice-package
+  cancel-in-progress: false
+
+env:
+  KEY_NAME: remanager-ondevice
+  PKG_DIR: packaging/vellum/remanager-ondevice
+  ARCH: aarch64
+  VBUILD_URL: https://github.com/Eeems/vbuild/releases/download/0.0.36/vbuild-x86_64-glibc
+  BUILDER_IMAGE: ghcr.io/eeems/vbuild-builder:main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install vbuild
+        run: |
+          curl --fail --location "$VBUILD_URL" --output /usr/local/bin/vbuild
+          chmod +x /usr/local/bin/vbuild
+
+      - name: Read the version
+        id: version
+        run: |
+          pkgver=$(sed -n 's/^pkgver=//p' "$PKG_DIR/VELBUILD")
+          pkgrel=$(sed -n 's/^pkgrel=//p' "$PKG_DIR/VELBUILD")
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "ondevice-v$pkgver" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match pkgver $pkgver in $PKG_DIR/VELBUILD"
+            exit 1
+          fi
+          echo "pkgver=$pkgver" >> "$GITHUB_OUTPUT"
+          echo "pkgrel=$pkgrel" >> "$GITHUB_OUTPUT"
+
+      - name: Set up the signing key
+        env:
+          SIGNING_KEY: ${{ secrets.ONDEVICE_SIGNING_KEY }}
+        run: |
+          keys="$HOME/.config/vbuild"
+          mkdir -p "$keys"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ -z "$SIGNING_KEY" ]; then
+              echo "::error::The ONDEVICE_SIGNING_KEY secret is not set"
+              exit 1
+            fi
+            printf '%s\n' "$SIGNING_KEY" > "$keys/$KEY_NAME.rsa"
+            chmod 600 "$keys/$KEY_NAME.rsa"
+            cp "packaging/keys/$KEY_NAME.rsa.pub" "$keys/$KEY_NAME.rsa.pub"
+            # Tablets trust the committed public key, so the secret must be its other half.
+            if ! openssl rsa -in "$keys/$KEY_NAME.rsa" -pubout 2>/dev/null | cmp -s - "$keys/$KEY_NAME.rsa.pub"; then
+              echo "::error::ONDEVICE_SIGNING_KEY does not match packaging/keys/$KEY_NAME.rsa.pub"
+              exit 1
+            fi
+          else
+            openssl genrsa -out "$keys/$KEY_NAME.rsa" 4096 2>/dev/null
+            openssl rsa -in "$keys/$KEY_NAME.rsa" -pubout -out "$keys/$KEY_NAME.rsa.pub" 2>/dev/null
+            echo "::notice::Manual run: signed with a throwaway key, nothing is published"
+          fi
+
+      - name: Prepare the build directory
+        env:
+          PKGVER: ${{ steps.version.outputs.pkgver }}
+        run: |
+          work="$RUNNER_TEMP/build"
+          mkdir -p "$work"
+          # Built from this checkout rather than the tag's download, so a manual run can test any branch.
+          git archive --prefix="reManager-ondevice-ondevice-v$PKGVER/" \
+            -o "$work/remanager-ondevice-$PKGVER.tar.gz" HEAD
+          sed -e 's|^source=.*|source="$pkgname-$pkgver.tar.gz"|' -e '/^sha512sums=/,$d' \
+            "$PKG_DIR/VELBUILD" > "$work/VELBUILD"
+          (cd "$work" && printf "sha512sums='%s\n%s'\n" \
+            "$(sha512sum "remanager-ondevice-$PKGVER.tar.gz" | cut -d' ' -f1)" \
+            "remanager-ondevice-$PKGVER.tar.gz") >> "$work/VELBUILD"
+          echo "WORK=$work" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) VBUILD_KEY_NAME="$KEY_NAME" CARCH="$ARCH" \
+            vbuild -C "$WORK" all
+          ls -la "$WORK/dist/$ARCH/"
+
+      - name: Verify the signature and build the signed index
+        run: |
+          site="$RUNNER_TEMP/site"
+          mkdir -p "$site/$ARCH"
+          cp "$WORK/dist/$ARCH/"*.apk "$site/$ARCH/"
+          docker run --rm \
+            -v "$site/$ARCH:/packages" \
+            -v "$HOME/.config/vbuild:/keys:ro" \
+            -w /packages \
+            "$BUILDER_IMAGE" \
+            sh -c "
+              set -e
+              cp /keys/$KEY_NAME.rsa.pub /etc/apk/keys/
+              for apk in *.apk; do apk verify \"\$apk\"; done
+              apk index --rewrite-arch $ARCH -o APKINDEX.tar.gz *.apk
+              abuild-sign -k /keys/$KEY_NAME.rsa APKINDEX.tar.gz
+              apk verify APKINDEX.tar.gz
+              chown -R $(id -u):$(id -g) /packages
+            "
+          echo "SITE=$site" >> "$GITHUB_ENV"
+
+      - name: Add the public key and instructions to the site
+        env:
+          PKGVER: ${{ steps.version.outputs.pkgver }}
+          PKGREL: ${{ steps.version.outputs.pkgrel }}
+        run: |
+          cp "$HOME/.config/vbuild/$KEY_NAME.rsa.pub" "$SITE/"
+          fingerprint=$(openssl rsa -pubin -in "$SITE/$KEY_NAME.rsa.pub" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
+          base="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}"
+          cat > "$SITE/index.html" <<HTML
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>reManager on-device packages</title>
+          <h1>reManager on-device packages</h1>
+          <p>An apk package repository for Vellum, holding remanager-ondevice $PKGVER-r$PKGREL for $ARCH.</p>
+          <p>Repository: <code>$base</code></p>
+          <p>Signing key: <a href="$KEY_NAME.rsa.pub">$KEY_NAME.rsa.pub</a>, SHA-256 of its DER form: <code>$fingerprint</code></p>
+          <p>Source: <a href="https://github.com/$GITHUB_REPOSITORY">github.com/$GITHUB_REPOSITORY</a>, see ondevice/README.md.</p>
+          HTML
+          sed -i 's/^          //' "$SITE/index.html"
+          echo "Key fingerprint: $fingerprint" >> "$GITHUB_STEP_SUMMARY"
+          find "$SITE" -type f | sort >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remanager-ondevice-${{ steps.version.outputs.pkgver }}-r${{ steps.version.outputs.pkgrel }}
+          path: ${{ env.SITE }}
+
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref_type == 'tag'
+        with:
+          path: ${{ env.SITE }}
+
+  publish:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
