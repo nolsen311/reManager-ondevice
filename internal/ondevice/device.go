@@ -11,6 +11,12 @@ import (
 	"reManager/internal/commands"
 )
 
+// PackageName is this app's package in Vellum.
+const PackageName = "remanager-ondevice"
+
+// Version is set at build time with -ldflags "-X reManager/internal/ondevice.Version=...".
+var Version = "dev"
+
 // Device is the tablet the backend is running on.
 type Device struct {
 	Type rmdevice.Type

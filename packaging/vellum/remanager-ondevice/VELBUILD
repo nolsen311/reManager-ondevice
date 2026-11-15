@@ -1,0 +1,70 @@
+# Vellum package definition for reManager's on-tablet build.
+# To submit it, copy this directory to packages/ in a checkout of
+# https://github.com/vellum-dev/vellum, fill in the maintainer, tag a release
+# here, run ./scripts/update-checksums.sh remanager-ondevice there, and build
+# it with ./scripts/build-package.sh remanager-ondevice aarch64.
+maintainer="Your Name <you@example.com>"
+pkgname=remanager-ondevice
+pkgver=0.1.0
+pkgrel=0
+upstream_author="nolsen311"
+category="apps"
+pkgdesc="Browse, install, update and remove mods from the tablet itself, without a computer"
+url="https://github.com/$upstream_author/reManager-ondevice"
+# Only tried on the Paper Pro Move; the app refuses other models unless told otherwise.
+arch="aarch64"
+license="GPL-3.0-only"
+depends="appload !rm1 !rm2 !rmpp !rmppure"
+readmeurl="https://raw.githubusercontent.com/$upstream_author/reManager-ondevice/v$pkgver/ondevice/README.md"
+
+source="$pkgname-$pkgver.tar.gz::https://github.com/$upstream_author/reManager-ondevice/archive/refs/tags/v$pkgver.tar.gz"
+builddir="$srcdir/reManager-ondevice-$pkgver"
+
+image="ghcr.io/toltec-dev/golang:v4.0"
+
+build() {
+	set -e
+	case "$CARCH" in
+	aarch64) ;;
+	*)
+		echo "Invalid CARCH: $CARCH"
+		exit 1
+		;;
+	esac
+
+	# rcc compiles the QML screens into the resources.rcc AppLoad loads.
+	apt-get update
+	apt-get install -y --no-install-recommends qt6-base-dev-tools
+
+	cd "$builddir"
+	# go.mod names a newer Go than the image has; Go fetches it.
+	export GOTOOLCHAIN=auto
+	export GOPATH="$srcdir/go" GOCACHE="$srcdir/go-cache"
+	VERSION="$pkgver-r$pkgrel" RCC=/usr/lib/qt6/libexec/rcc ./ondevice/build.sh
+}
+
+package() {
+	set -e
+	_app="$pkgdir"/home/root/xovi/exthome/appload/remanager
+	_out="$builddir"/ondevice/output/remanager
+
+	install -Dm755 "$_out"/backend/entry "$_app"/backend/entry
+	install -Dm644 "$_out"/manifest.json "$_app"/manifest.json
+	install -Dm644 "$_out"/icon.png "$_app"/icon.png
+	install -Dm644 "$_out"/resources.rcc "$_app"/resources.rcc
+
+	install -Dm644 "$builddir"/LICENSE \
+		"$pkgdir"/home/root/.vellum/licenses/$pkgname/LICENSE
+	echo "https://github.com/$upstream_author/reManager-ondevice/archive/refs/tags/v$pkgver.tar.gz" > \
+		"$pkgdir"/home/root/.vellum/licenses/$pkgname/SOURCES
+}
+
+postdeinstall() {
+	# The record of the last install, removal or update started from the app.
+	if [ "$VELLUM_PURGE" = "1" ]; then
+		rm -rf /home/root/.local/state/remanager-ondevice
+	fi
+}
+
+sha512sums='0
+remanager-ondevice-0.1.0.tar.gz'

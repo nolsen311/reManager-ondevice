@@ -317,6 +317,7 @@ ondevice/manifest.json          AppLoad manifest
     hashtable is built.
   - Not yet known: whether a `daemon-reload` during a job also discards the
     job's `ExecStopPost`. The worker's own restore does not depend on it.
+  - With these changes, a rebuild started from the app worked on the Move.
 - The second rebuild on the Move worked and restored the hashtable. The app
   then could not start: the rebuild had recorded about 3,000 lines of the
   temporary UI's log, and the reply to `job` carried all of them. That is
@@ -373,6 +374,18 @@ ondevice/manifest.json          AppLoad manifest
 - The icon (`ondevice/icon.svg`, rendered to `icon.png`) is the desktop
   icon without its background, black on transparent. AppLoad's Reload does
   not pick up a changed icon; restarting the reMarkable UI does.
+- Packaging: `packaging/vellum/remanager-ondevice/VELBUILD` builds the app
+  from a tagged source archive in Vellum's `ghcr.io/toltec-dev/golang:v4.0`
+  image, installing Qt's `rcc` from Debian and letting Go fetch the version
+  `go.mod` names. Its `build` and `package` steps were run by hand in that
+  image (vbuild itself was not available in the session that wrote it) and
+  produced the app folder plus licence files, with the binary stamped
+  `0.1.0-r0`. Before submitting: fill in the maintainer, tag `v0.1.0`, and
+  run Vellum's `update-checksums.sh`. Vellum accepts pull requests only from
+  people, not agents, and no commit there may credit an assistant.
+- The app's own package (`remanager-ondevice`) is protected from removal
+  from inside the app, like the packages it runs on. Updating it is allowed;
+  the new version loads the next time the app opens.
 - `ondevice/build.sh` builds the app folder (manifest, icon, `resources.rcc`,
   `backend/entry`) into `ondevice/output/remanager`.
 

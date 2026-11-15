@@ -61,6 +61,8 @@ type deviceInfo struct {
 	Name     string `json:"name"`
 	Firmware string `json:"firmware"`
 	Tested   bool   `json:"tested"`
+	// AppVersion is this app's own version.
+	AppVersion string `json:"appVersion"`
 }
 
 // Serve answers requests until AppLoad closes the connection or asks the backend to stop.
@@ -135,7 +137,7 @@ func (h *Handler) call(ctx context.Context, t Transport, req request) (any, erro
 	switch req.Method {
 	case "device":
 		d := h.Service.device
-		return deviceInfo{Model: string(d.Type), Name: d.Type.DisplayName(), Firmware: h.Service.firmware(), Tested: d.Tested()}, nil
+		return deviceInfo{Model: string(d.Type), Name: d.Type.DisplayName(), Firmware: h.Service.firmware(), Tested: d.Tested(), AppVersion: Version}, nil
 	case "refresh":
 		return struct{}{}, h.Service.Refresh()
 	case "list":

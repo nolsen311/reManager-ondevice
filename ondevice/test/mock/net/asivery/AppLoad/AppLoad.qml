@@ -42,7 +42,7 @@ Item {
         var p = req.params || {}
         switch (req.method) {
         case "device":
-            reply(req.id, { model: "rmppmove", name: "reMarkable Paper Pro Move", firmware: "3.27.3.0", tested: true })
+            reply(req.id, { model: "rmppmove", name: "reMarkable Paper Pro Move", firmware: "3.27.3.0", tested: true, appVersion: "0.1.0" })
             break
         case "job":
             reply(req.id, scenario === "running"

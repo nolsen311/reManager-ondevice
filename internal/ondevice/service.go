@@ -162,6 +162,8 @@ var protectedPackages = map[string]bool{
 	"xovi":                  true,
 	"qt-resource-rebuilder": true,
 	"appload":               true,
+	// This app's own package: removing it from inside the app would delete the app while it runs.
+	PackageName: true,
 }
 
 func hidden(name string) bool {

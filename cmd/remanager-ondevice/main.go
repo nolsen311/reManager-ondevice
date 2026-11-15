@@ -36,6 +36,7 @@ const usage = `usage:
   remanager-ondevice plan-upgrade [package]...  show what an upgrade would do, changing nothing
   remanager-ondevice upgrade [package]... upgrade the named packages, or everything
   remanager-ondevice job                  show the last job started from the app
+  remanager-ondevice version              print this build's version
 
 options, before the subcommand:
   --allow-untested   run on a tablet model this build has not been tried on
@@ -60,6 +61,10 @@ func run(args []string, allowUntested bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	if args[0] == "version" {
+		fmt.Println(ondevice.Version)
+		return nil
+	}
 	jobs := &ondevice.Jobs{}
 	if args[0] == "job" {
 		status, err := jobs.Status()

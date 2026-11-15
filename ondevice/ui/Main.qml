@@ -315,7 +315,8 @@ Rectangle {
         }
         Text {
             anchors { left: parent.left; leftMargin: 40 * unit; bottom: parent.bottom; bottomMargin: 18 * unit }
-            text: root.device ? root.device.name + " · OS " + root.device.firmware + (root.device.tested ? "" : " · untested model") : ""
+            text: root.device ? root.device.name + " · OS " + root.device.firmware + (root.device.tested ? "" : " · untested model")
+                + (root.device.appVersion ? " · reManager " + root.device.appVersion : "") : ""
             font.pixelSize: 28 * unit
             color: "#444444"
         }
