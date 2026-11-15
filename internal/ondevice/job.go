@@ -150,12 +150,24 @@ func launchInSystemdUnit(args []string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("systemd-run",
-		append([]string{"--unit=" + jobUnit, "--collect", "--quiet", "--setenv=HOME=/home/root", exe}, args...)...)
+	cmd := exec.Command("systemd-run", systemdRunArgs(exe, args)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("could not start the worker: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func systemdRunArgs(exe string, args []string) []string {
+	runArgs := []string{"--unit=" + jobUnit, "--collect", "--quiet", "--setenv=HOME=/home/root"}
+	if len(args) > 1 && isSystemAction(args[1]) {
+		// However the job ends, systemd runs this after it, so the UI comes back even if the worker itself was killed.
+		runArgs = append(runArgs, "--property=ExecStopPost="+exe+" worker restore-ui")
+	}
+	if len(args) > 1 && args[1] == ActionRebuildHashtable {
+		// A rebuild normally takes one to two minutes; one that runs on is stuck on its temporary UI.
+		runArgs = append(runArgs, "--property=RuntimeMaxSec=300")
+	}
+	return append(append(runArgs, exe), args...)
 }
 
 // RunWorker is the worker's side: it holds the lock for the whole job and records every step. run does the work and reports through the callback.

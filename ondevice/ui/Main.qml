@@ -433,7 +433,7 @@ Rectangle {
                 Text {
                     width: parent.width
                     text: root.system.canRebuild
-                        ? "UI mods find parts of the reMarkable interface through the hashtable. Rebuild it after an OS update, or when a mod asks for it. Takes about a minute and restarts the UI."
+                        ? "UI mods find parts of the reMarkable interface through the hashtable. Rebuild it after an OS update, or when a mod asks for it. Takes one to two minutes and restarts the screen twice."
                         : "Needs qt-resource-rebuilder, which is not installed."
                     wrapMode: Text.Wrap
                     font.pixelSize: 30 * unit
@@ -789,7 +789,10 @@ Rectangle {
                     width: parent.width
                     text: root.confirmAction === "restart"
                         ? "The screen goes blank for a few seconds and the reMarkable UI starts again with mods. This app closes; open it again afterwards to see the result."
-                        : "The reMarkable UI stops while the hashtable is rebuilt, which takes about a minute. If you have a passcode, enter it on the screen when asked. The UI then starts again with mods. This app closes; open it again afterwards to see the result."
+                        : "Takes one to two minutes, and the screen restarts twice.\n\n"
+                          + "1.  The screen restarts into a temporary reMarkable UI. It looks normal but has no AppLoad and no mods. If you have a passcode, enter it.\n"
+                          + "2.  Leave the tablet alone until the screen restarts a second time. That is the sign it has finished.\n\n"
+                          + "Triple-tap is turned off until then. This app closes; open it again afterwards to see the result."
                     wrapMode: Text.Wrap
                     font.pixelSize: 32 * unit
                 }
@@ -862,7 +865,9 @@ Rectangle {
                     width: parent.width
                     visible: !parent.parent.done
                     text: parent.parent.system
-                        ? "The reMarkable UI is about to restart and this app will close. Open it again afterwards to see the result."
+                        ? (root.jobAction === "rebuild-hashtable"
+                            ? "The screen is about to restart into a temporary UI without mods. Enter your passcode if asked, then wait for the second restart. Open this app again afterwards to see the result."
+                            : "The reMarkable UI is about to restart and this app will close. Open it again afterwards to see the result.")
                         : "You can close this screen. The work carries on, and this page shows where it got to when you come back."
                     wrapMode: Text.Wrap
                     font.pixelSize: 28 * unit

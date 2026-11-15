@@ -295,7 +295,28 @@ ondevice/manifest.json          AppLoad manifest
   manages the UI. Otherwise it runs `xovi/rebuild_hashtable` and then starts
   the UI with mods, even if the rebuild failed, since the rebuild leaves the
   UI stopped. The result is shown the next time the app opens, within ten
-  minutes. Restart has worked on the Move; the rebuild has not been tried there yet. If the UI does not come
+  minutes. Restart has worked on the Move.
+- The first rebuild on the Move (2026-11-15) failed. During the rebuild the
+  screen shows a temporary reMarkable UI with no mods, which looks finished.
+  A triple-tap then ran `xovi/start`, whose `systemctl daemon-reload` and
+  restart stopped the job 45 s in, before the hashtable was saved. The
+  worker treated the stop as a cancel and did not start the UI again. Since
+  then:
+  - `xovi-tripletap` is stopped for the rebuild if it was running, and
+    started again afterwards. A marker in `/run` records the pause, so a
+    reboot forgets it.
+  - The worker brings the UI back when told to stop, using an executor with
+    a context of its own (`SetRescueExecutor`). systemd also runs
+    `worker restore-ui` as the job's `ExecStopPost`, for when the worker
+    itself is killed. Restoring starts the UI only if it is not already
+    active or activating, and resumes triple-tap.
+  - A rebuild has a five-minute limit (`RuntimeMaxSec=300`).
+  - The confirm screen says the screen restarts twice, that the UI in
+    between is temporary, and to wait for the second restart.
+  - Nothing can be drawn on the temporary UI: no mods are loaded while the
+    hashtable is built.
+  - Not yet known: whether a `daemon-reload` during a job also discards the
+    job's `ExecStopPost`. The worker's own restore does not depend on it. If the UI does not come
   back, restarting the tablet brings back the stock UI (section 5).
 - Upgrades come from Vellum's own solver (`upgrade --simulate`) after an
   index refresh, for everything or for named packages. Upgrading the

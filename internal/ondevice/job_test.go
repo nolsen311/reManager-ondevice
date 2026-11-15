@@ -381,3 +381,25 @@ func TestHandlerStopsOnTerminate(t *testing.T) {
 		t.Fatal("Serve kept running after terminate")
 	}
 }
+
+func TestSystemdRunArgs(t *testing.T) {
+	exe := "/home/root/xovi/exthome/appload/remanager/backend/entry"
+	install := strings.Join(systemdRunArgs(exe, []string{"worker", ActionInstall, "--state", "/s", "--", "koreader"}), " ")
+	if strings.Contains(install, "ExecStopPost") || strings.Contains(install, "RuntimeMaxSec") {
+		t.Errorf("an install needs no UI rescue or time limit: %s", install)
+	}
+	if !strings.HasSuffix(install, exe+" worker install --state /s -- koreader") {
+		t.Errorf("install = %s", install)
+	}
+
+	rebuild := strings.Join(systemdRunArgs(exe, []string{"worker", ActionRebuildHashtable, "--state", "/s", "--"}), " ")
+	for _, want := range []string{"--property=ExecStopPost=" + exe + " worker restore-ui", "--property=RuntimeMaxSec=300"} {
+		if !strings.Contains(rebuild, want) {
+			t.Errorf("rebuild args %s lack %s", rebuild, want)
+		}
+	}
+	restart := strings.Join(systemdRunArgs(exe, []string{"worker", ActionRestart, "--state", "/s", "--"}), " ")
+	if !strings.Contains(restart, "ExecStopPost") || strings.Contains(restart, "RuntimeMaxSec") {
+		t.Errorf("restart args = %s", restart)
+	}
+}

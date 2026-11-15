@@ -121,3 +121,63 @@ func TestSystemJobsTakeNoPackages(t *testing.T) {
 		t.Error("an unknown action should be refused")
 	}
 }
+
+func TestRebuildHashtablePausesAndResumesTripletap(t *testing.T) {
+	tablet := systemTablet()
+	s := newTestService(standardCatalog(), tablet)
+
+	if result := s.RebuildHashtable(nil, nil); !result.Success {
+		t.Fatalf("result = %+v", result)
+	}
+	pause := indexOf(tablet.commands, "systemctl stop xovi-tripletap")
+	rebuild := indexOf(tablet.commands, "/home/root/xovi/rebuild_hashtable")
+	resume := indexOf(tablet.commands, "systemctl start xovi-tripletap")
+	if pause < 0 || rebuild < 0 || resume < 0 || !(pause < rebuild && rebuild < resume) {
+		t.Errorf("want triple-tap paused before the rebuild and resumed after, ran %v", tablet.commands)
+	}
+	if !strings.Contains(tablet.commands[pause], "is-active --quiet xovi-tripletap") {
+		t.Errorf("only a running tripletap should be paused: %q", tablet.commands[pause])
+	}
+}
+
+func TestRebuildHashtableStoppedPartway(t *testing.T) {
+	stopping := systemTablet().on("/home/root/xovi/rebuild_hashtable", "", errors.New("signal: killed"))
+	stopping.err = errors.New("context canceled")
+	rescue := systemTablet()
+	s := newTestService(standardCatalog(), stopping)
+	s.SetRescueExecutor(rescue)
+
+	result := s.RebuildHashtable(nil, nil)
+	if result.Success || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], "stopped before it finished") {
+		t.Errorf("result = %+v", result)
+	}
+	if indexOf(rescue.commands, "/home/root/xovi/start") < 0 || indexOf(rescue.commands, "systemctl start xovi-tripletap") < 0 {
+		t.Errorf("the UI and triple-tap must be brought back through the rescue executor, ran %v", rescue.commands)
+	}
+}
+
+func TestRestoreUIOnlyStartsAStoppedUI(t *testing.T) {
+	tablet := systemTablet()
+	s := newTestService(standardCatalog(), tablet)
+
+	if err := s.RestoreUI(nil); err != nil {
+		t.Fatal(err)
+	}
+	start := indexOf(tablet.commands, "/home/root/xovi/start")
+	if start < 0 || !strings.Contains(tablet.commands[start], "active|activating|reloading) true") {
+		t.Errorf("the start must be guarded by the UI's state, ran %v", tablet.commands)
+	}
+}
+
+func TestRestartFailureStillRestoresTheUI(t *testing.T) {
+	tablet := systemTablet().on("reset-failed xochitl 2>/dev/null; /home/root/xovi/start", "", errors.New("exit status 1"))
+	s := newTestService(standardCatalog(), tablet)
+
+	result := s.Restart(nil, nil)
+	if result.Success {
+		t.Fatalf("result = %+v", result)
+	}
+	if indexOf(tablet.commands, "systemctl is-active xochitl") < 0 {
+		t.Errorf("a failed restart should be followed by the guarded restore, ran %v", tablet.commands)
+	}
+}

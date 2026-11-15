@@ -37,6 +37,14 @@ func NewLocalExecutor(ctx context.Context) *LocalExecutor {
 	return &LocalExecutor{ctx: ctx}
 }
 
+// Err reports why the executor's context ended, or nil while it is still live.
+func (e *LocalExecutor) Err() error {
+	if e.ctx == nil {
+		return nil
+	}
+	return e.ctx.Err()
+}
+
 func (e *LocalExecutor) Execute(commands []component.CommandResult) error {
 	for _, c := range commands {
 		if c.RequiresPTY {

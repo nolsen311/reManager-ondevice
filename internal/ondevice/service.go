@@ -30,6 +30,28 @@ type Service struct {
 	vellum   *vellum.Client
 	exec     executor.CommandExecutor
 	device   Device
+	// rescue runs the steps that bring the reMarkable UI back. It must outlive a cancelled job, so in the app it has a context of its own.
+	rescue executor.CommandExecutor
+}
+
+// SetRescueExecutor gives the service an executor that still works after the job's own has been cancelled.
+func (s *Service) SetRescueExecutor(rescue executor.CommandExecutor) {
+	s.rescue = rescue
+}
+
+func (s *Service) rescueExec() executor.CommandExecutor {
+	if s.rescue != nil {
+		return s.rescue
+	}
+	return s.exec
+}
+
+// stopped reports whether the job was told to stop: a systemd stop, a time limit, or the app closing.
+func (s *Service) stopped() bool {
+	if c, ok := s.exec.(interface{ Err() error }); ok {
+		return c.Err() != nil
+	}
+	return false
 }
 
 // metadata supplies the install hooks; in the real app it is the same store as catalog.

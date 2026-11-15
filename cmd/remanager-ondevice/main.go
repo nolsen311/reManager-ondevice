@@ -80,6 +80,8 @@ func run(args []string, allowUntested bool) error {
 	metadata := vellum.NewMetadataStore()
 	exec := executor.NewLocalExecutor(ctx)
 	service := ondevice.NewService(metadata, metadata, exec, device)
+	// Steps that bring the reMarkable UI back must still run after a stop signal has cancelled the job.
+	service.SetRescueExecutor(executor.NewLocalExecutor(context.Background()))
 
 	switch args[0] {
 	case "list", "installed":
@@ -161,6 +163,10 @@ func run(args []string, allowUntested bool) error {
 
 // runWorker is what a job started from the app runs as, in its own systemd unit: worker <action> --state <dir> -- [package]...
 func runWorker(args []string, service *ondevice.Service) error {
+	// Run by systemd after a restart or rebuild job ends, however it ended.
+	if len(args) == 1 && args[0] == "restore-ui" {
+		return service.RestoreUI(nil)
+	}
 	if len(args) < 4 || args[1] != "--state" || args[3] != "--" {
 		return fmt.Errorf("worker is started by the app, not by hand")
 	}

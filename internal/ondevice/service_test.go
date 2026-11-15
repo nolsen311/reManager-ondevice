@@ -17,6 +17,8 @@ var move = Device{Type: rmdevice.RMPPMove, Arch: rmdevice.Aarch64}
 
 // fakeTablet answers the shell commands the Vellum client sends. Each rule is matched against the command as a substring, first match wins.
 type fakeTablet struct {
+	// err, when set, is what the tablet reports as the reason its job was stopped.
+	err      error
 	mu       sync.Mutex
 	rules    []rule
 	commands []string
@@ -57,6 +59,7 @@ func (f *fakeTablet) ran(substr string) bool {
 }
 
 func (f *fakeTablet) ExecuteWithOutput(cmd string) (string, error) { return f.answer(cmd) }
+func (f *fakeTablet) Err() error                                   { return f.err }
 func (f *fakeTablet) Execute([]component.CommandResult) error      { return nil }
 func (f *fakeTablet) ExecuteStreaming(cmd string, onOutput func(string)) error {
 	out, err := f.answer(cmd)
