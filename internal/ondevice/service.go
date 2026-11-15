@@ -2,6 +2,7 @@ package ondevice
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -98,6 +99,8 @@ type Plan struct {
 	Requested []string `json:"requested"`
 	// Packages is everything that would be installed, changed or removed, dependencies included.
 	Packages []string `json:"packages"`
+	// Keep lists installed packages a removal first marks as explicitly installed, so a need such as "a launcher" stays settled once the removed package no longer names them.
+	Keep []string `json:"keep,omitempty"`
 	// Upgrades maps a package that is already installed to "old -> new".
 	Upgrades map[string]string `json:"upgrades,omitempty"`
 	// Error says why the request cannot be carried out; the plan is then not runnable.
@@ -394,8 +397,19 @@ func (s *Service) PlanRemove(names []string) (*Plan, error) {
 	}
 
 	simulation, err := s.vellum.SimulateDel(names...)
+	var keep []string
 	if err != nil {
-		return blockedPlan(ActionRemove, names, err.Error()), nil
+		// Vellum will not choose between providers on its own: once the removed package no longer names, say, appload, a mod that only needs "a launcher" leaves the choice open even though appload is installed. Naming the installed provider settles it.
+		var ok bool
+		keep, ok = installedProviders(err.Error(), installed)
+		if !ok {
+			return blockedPlan(ActionRemove, names, err.Error()), nil
+		}
+		purged, purgeErr := s.vellum.SimulateAddPurges(keep, names)
+		if purgeErr != nil {
+			return blockedPlan(ActionRemove, names, purgeErr.Error()), nil
+		}
+		simulation = &vellum.SimulateDelResult{Packages: purged}
 	}
 	if len(simulation.Blocked) > 0 {
 		var reasons []string
@@ -418,7 +432,63 @@ func (s *Service) PlanRemove(names []string) (*Plan, error) {
 			return blockedPlan(ActionRemove, names, "Vellum would leave "+name+" installed, most likely because another mod needs it."), nil
 		}
 	}
-	return &Plan{Action: ActionRemove, Requested: names, Packages: simulation.Packages}, nil
+	return &Plan{Action: ActionRemove, Requested: names, Packages: simulation.Packages, Keep: keep}, nil
+}
+
+// installedProviders reads a Vellum failure that left a virtual package unchosen and returns, for each such virtual, the one installed package that provides it. It reports false unless every virtual has exactly one installed provider.
+func installedProviders(failure string, installed map[string]string) ([]string, bool) {
+	virtuals := vellum.ParseUnselectedVirtuals(failure)
+	if len(virtuals) == 0 {
+		return nil, false
+	}
+	// The "provided by" list names each candidate as name-version, possibly several to a line, up to "required by".
+	var keep []string
+	current := ""
+	var candidates []string
+	finish := func() bool {
+		if current == "" {
+			return true
+		}
+		var found []string
+		for _, candidate := range candidates {
+			for name, version := range installed {
+				if candidate == name+"-"+version && !slices.Contains(found, name) {
+					found = append(found, name)
+				}
+			}
+		}
+		if len(found) != 1 {
+			return false
+		}
+		if !slices.Contains(keep, found[0]) {
+			keep = append(keep, found[0])
+		}
+		return true
+	}
+	inProviders := false
+	for _, line := range strings.Split(failure, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if name, ok := strings.CutSuffix(trimmed, " (virtual):"); ok && slices.Contains(virtuals, name) {
+			if !finish() {
+				return nil, false
+			}
+			current, candidates, inProviders = name, nil, false
+			continue
+		}
+		if rest, ok := strings.CutPrefix(trimmed, "provided by:"); ok {
+			inProviders = true
+			trimmed = rest
+		} else if strings.Contains(trimmed, ":") {
+			inProviders = false
+		}
+		if inProviders && current != "" {
+			candidates = append(candidates, strings.Fields(trimmed)...)
+		}
+	}
+	if !finish() || len(keep) == 0 {
+		return nil, false
+	}
+	return keep, true
 }
 
 // Remove removes names, and whatever was only installed for them, in one Vellum transaction.
@@ -429,6 +499,16 @@ func (s *Service) Remove(names []string, onProgress func(Progress)) InstallResul
 	}
 	if plan.Error != "" {
 		return InstallResult{Errors: []string{plan.Error}}
+	}
+	if len(plan.Keep) > 0 {
+		// Already installed, so this only records them as installed on purpose; no package changes.
+		if err := s.vellum.AddStreaming(func(line string) {
+			if onProgress != nil {
+				onProgress(Progress{Status: string(executor.StatusInstalling), Message: line})
+			}
+		}, plan.Keep...); err != nil {
+			return InstallResult{Errors: []string{"Could not mark " + strings.Join(plan.Keep, ", ") + " as installed, so nothing was removed: " + err.Error()}}
+		}
 	}
 	var deferred []string
 	inst := installer.NewInstaller(s.vellum, s.metadata, s.exec)

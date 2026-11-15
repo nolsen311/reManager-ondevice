@@ -246,3 +246,98 @@ func TestInstallLoadsTheCatalogueInAFreshProcess(t *testing.T) {
 		t.Error("planning should load the catalogue when it is not loaded yet")
 	}
 }
+
+// What Vellum printed on the Move when retaskable was removed while koreader still needed "a launcher".
+const unchosenLauncher = `ERROR: unable to select packages:
+  launcher (virtual):
+    note: please select one of the 'provided by'
+          packages explicitly
+    provided by: appload-0.5.3-r3
+                 appload-0.4.2-r1
+                 appload-0.6.0-r1 oxide-3.1.1-r3
+                 oxide-3.1.2-r2
+    required by: koreader-2026.07.1-r1[launcher]
+`
+
+func tabletWithLauncherQuestion() *fakeTablet {
+	return (&fakeTablet{}).
+		on("RELEASE_VERSION", "RELEASE_VERSION=3.27.3.0\n", nil).
+		on("list -I", strings.Join([]string{
+			"appload-0.5.3-r3 aarch64 {appload} (GPL-3.0) [installed]",
+			"koreader-2026.07.1-r1 aarch64 {koreader} (AGPL-3.0) [installed]",
+			"retaskable-1.0.5-r1 aarch64 {retaskable} (GPL-3.0-only) [installed]",
+		}, "\n")+"\n", nil).
+		on("del -s 'retaskable'", unchosenLauncher, errors.New("exit status 1")).
+		on("add --simulate 'appload' '!retaskable'", "(1/1) Purging retaskable (1.0.5-r1)\nOK: 40 MiB in 57 packages\n", nil)
+}
+
+func TestPlanRemoveSettlesALauncherLeftUnchosen(t *testing.T) {
+	tablet := tabletWithLauncherQuestion()
+	s := newTestService(standardCatalog(), tablet)
+
+	plan, err := s.PlanRemove([]string{"retaskable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Error != "" || !reflect.DeepEqual(plan.Packages, []string{"retaskable"}) || !reflect.DeepEqual(plan.Keep, []string{"appload"}) {
+		t.Errorf("plan = %+v, want retaskable removed and appload kept", plan)
+	}
+	if tablet.ran("vellum add 'appload'") || tablet.ran("vellum del 'retaskable'") {
+		t.Errorf("planning must not change anything, ran %v", tablet.commands)
+	}
+}
+
+func TestRemoveMarksTheKeptProviderFirst(t *testing.T) {
+	tablet := tabletWithLauncherQuestion().
+		on("vellum add 'appload'", "OK: 41 MiB in 58 packages\n", nil).
+		on("vellum del 'retaskable'", "(1/1) Purging retaskable (1.0.5-r1)\n", nil)
+	s := newTestService(standardCatalog(), tablet)
+
+	result := s.Remove([]string{"retaskable"}, nil)
+	if !result.Success {
+		t.Fatalf("result = %+v", result)
+	}
+	add, del := -1, -1
+	for i, cmd := range tablet.commands {
+		if strings.HasSuffix(cmd, "vellum add 'appload'") {
+			add = i
+		}
+		if strings.HasSuffix(cmd, "vellum del 'retaskable'") {
+			del = i
+		}
+	}
+	if add < 0 || del < 0 || add > del {
+		t.Errorf("want appload marked before retaskable is removed, ran %v", tablet.commands)
+	}
+}
+
+func TestRemoveStopsIfTheProviderCannotBeMarked(t *testing.T) {
+	tablet := tabletWithLauncherQuestion().on("vellum add 'appload'", "ERROR: something\n", errors.New("exit status 1"))
+	s := newTestService(standardCatalog(), tablet)
+
+	if result := s.Remove([]string{"retaskable"}, nil); result.Success || tablet.ran("vellum del 'retaskable'") {
+		t.Errorf("result %+v, ran %v", result, tablet.commands)
+	}
+}
+
+func TestInstalledProviders(t *testing.T) {
+	installed := map[string]string{"appload": "0.5.3-r3", "koreader": "2026.07.1-r1"}
+	if got, ok := installedProviders(unchosenLauncher, installed); !ok || !reflect.DeepEqual(got, []string{"appload"}) {
+		t.Errorf("got %v %v", got, ok)
+	}
+	// Neither provider installed, or both: the choice is the user's, not the app's.
+	if _, ok := installedProviders(unchosenLauncher, map[string]string{"koreader": "2026.07.1-r1"}); ok {
+		t.Error("no installed provider should not be settled")
+	}
+	both := map[string]string{"appload": "0.5.3-r3", "oxide": "3.1.2-r2"}
+	if _, ok := installedProviders(unchosenLauncher, both); ok {
+		t.Error("two installed providers should not be settled")
+	}
+	// A different installed version is not a provider Vellum offered.
+	if _, ok := installedProviders(unchosenLauncher, map[string]string{"appload": "0.5.2-r0"}); ok {
+		t.Error("an installed version not in the list should not count")
+	}
+	if _, ok := installedProviders("ERROR: unable to select packages:\n  foo (no such package):\n", installed); ok {
+		t.Error("a failure that is not about a virtual should not be settled")
+	}
+}

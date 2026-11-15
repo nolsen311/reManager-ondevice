@@ -220,7 +220,7 @@ not come back within a set time after an install.
 | Upstream feature | On-device | Notes |
 |------------------|-----------|-------|
 | Browse and install mods | Milestone 1 | The goal. |
-| Upgrade and uninstall mods | Built | Tested against a fake tablet and rendered with mock data; not yet run on the Move. |
+| Upgrade and uninstall mods | Built | On the Move: a single-mod update (`hide-dev-mode-icon`) worked. Removal of `retaskable` first failed (see below) and the fix is not yet tried there. |
 | Saved SSH logins for several devices | Drop | One device, local, no credentials. |
 | Built-in terminal | Drop | No keyboard worth using; SSH remains for this. |
 | File transfer to and from a computer | Drop | No computer in the picture. |
@@ -274,6 +274,14 @@ ondevice/manifest.json          AppLoad manifest
   `xovi`, `qt-resource-rebuilder`, `appload`); the removal would take one of
   those with it; other mods still need the package (it names them and does
   not remove them for you); or Vellum would leave the package installed.
+- Found on the Move: removing `retaskable` failed because KOReader needs
+  "a launcher" and, once `retaskable` no longer named AppLoad, Vellum would
+  not choose between AppLoad and Oxide by itself, though AppLoad was
+  installed. When a removal fails that way and exactly one installed
+  package provides the virtual, the plan now says so and the removal first
+  runs `vellum add <provider>`. That only records the provider as installed
+  on purpose; it changes no package. If no installed provider, or more than
+  one, matches, the removal is refused with Vellum's message.
 - Upgrades come from Vellum's own solver (`upgrade --simulate`) after an
   index refresh, for everything or for named packages. Upgrading the
   packages the app runs on is allowed; they take effect when xovi restarts.

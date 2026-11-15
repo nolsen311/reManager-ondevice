@@ -561,6 +561,13 @@ Rectangle {
                 }
                 Text {
                     width: parent.width
+                    visible: !parent.parent.blocked && !parent.parent.nothing && root.plan.keep !== undefined && root.plan.keep.length > 0
+                    text: root.plan && root.plan.keep ? root.plan.keep.join(", ") + " will be recorded as installed by you, so the mods that need it keep it. Nothing else about it changes." : ""
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 30 * unit
+                }
+                Text {
+                    width: parent.width
                     visible: !parent.parent.blocked && !parent.parent.nothing
                     text: parent.parent.action === "remove"
                         ? "A removed mod may stay visible until xovi is restarted."
