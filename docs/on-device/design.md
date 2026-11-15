@@ -421,6 +421,9 @@ ondevice/manifest.json          AppLoad manifest
 - The tablet's font lacks some symbols: the check mark showed as an empty
   box on the Move. The screens use only plain text and ordinary punctuation
   ("…", "·", "•", quotes), and draw marks and the text cursor as shapes.
+- Self-update confirmed on the Move (2026-11-15): v0.1.1 appeared in the
+  app's Updates tab, updated from there, and the header showed v0.1.1 after
+  reopening the app.
 - Install docs: `ondevice/site/index.html` is the page at
   `https://nolsen311.github.io/reManager-ondevice/`, with commands for
   Linux, macOS and Windows. `.github/workflows/pages.yml` publishes it with
