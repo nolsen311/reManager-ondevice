@@ -3,6 +3,7 @@ package vellum
 import (
 	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -311,6 +312,13 @@ func (c *Client) ReenableStreaming(onOutput func(line string)) error {
 }
 
 // Cached like the installed list: the Plan's checks ask for it several times per change and each read is up to three SSH round trips; a sync invalidates the cache.
+// A command that ran and exited non-zero, whether it ran over SSH or on the tablet itself.
+func isExitError(err error) bool {
+	var remote *ssh.ExitError
+	var local *exec.ExitError
+	return errors.As(err, &remote) || errors.As(err, &local)
+}
+
 func (c *Client) GetOSVersionState() (*OSVersionState, error) {
 	c.cacheMu.Lock()
 	if c.osState != nil && time.Since(c.osStateAt) < installedCacheTTL {
@@ -343,8 +351,7 @@ func (c *Client) GetOSVersionState() (*OSVersionState, error) {
 		return nil, fmt.Errorf("could not read the OS version")
 	}
 	storedOutput, storedErr := c.executor.ExecuteWithOutput(fmt.Sprintf("cat %s/state/osver 2>/dev/null", VellumRoot))
-	var exitErr *ssh.ExitError
-	if storedErr != nil && !errors.As(storedErr, &exitErr) {
+	if storedErr != nil && !isExitError(storedErr) {
 		return nil, fmt.Errorf("could not read the stored OS version: %w", storedErr)
 	}
 	storedVersion := strings.TrimSpace(storedOutput)

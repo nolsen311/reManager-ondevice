@@ -1,0 +1,194 @@
+//go:build linux
+
+package ondevice
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"sync"
+
+	"reManager/internal/appload"
+)
+
+// Message types between the QML frontend and the backend. Contents are JSON.
+const (
+	// MsgRequest is frontend to backend: {"id": 1, "method": "list", "params": {...}}.
+	MsgRequest int32 = 1
+	// MsgResponse is backend to frontend: {"id": 1, "result": {...}} or {"id": 1, "error": "..."}.
+	MsgResponse int32 = 2
+	// MsgInstallEvent is backend to frontend, unprompted: one Event of the running install.
+	MsgInstallEvent int32 = 3
+)
+
+// Transport is the AppLoad connection, or a stand-in for it in tests.
+type Transport interface {
+	Send(msgType int32, contents string) error
+	Receive() (appload.Message, error)
+}
+
+type request struct {
+	ID     int             `json:"id"`
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params"`
+}
+
+type response struct {
+	ID     int    `json:"id"`
+	Result any    `json:"result,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+type namesParams struct {
+	Names []string `json:"names"`
+}
+
+// Handler answers the frontend's requests.
+type Handler struct {
+	Service *Service
+	Jobs    *Jobs
+
+	followMu  sync.Mutex
+	following bool
+}
+
+type deviceInfo struct {
+	Model    string `json:"model"`
+	Name     string `json:"name"`
+	Firmware string `json:"firmware"`
+	Tested   bool   `json:"tested"`
+}
+
+// Serve answers requests until AppLoad closes the connection or asks the backend to stop.
+func (h *Handler) Serve(ctx context.Context, t Transport) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for {
+		msg, err := t.Receive()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch msg.Type {
+		case appload.TypeTerminate:
+			return nil
+		case appload.TypeFrontendAttached:
+			// A frontend that opens during an install, or after the stock UI restarted, picks the install back up.
+			if h.Jobs.Running() {
+				h.follow(ctx, t, 0)
+			}
+		case MsgRequest:
+			// Requests run one at a time: Vellum must not run twice at once, and the frontend shows one screen at a time.
+			h.handle(ctx, t, msg.Contents)
+		}
+	}
+}
+
+func (h *Handler) handle(ctx context.Context, t Transport, contents string) {
+	var req request
+	if err := json.Unmarshal([]byte(contents), &req); err != nil {
+		reply(t, response{Error: "could not read the request: " + err.Error()})
+		return
+	}
+	result, err := h.call(ctx, t, req)
+	if err != nil {
+		reply(t, response{ID: req.ID, Error: err.Error()})
+		return
+	}
+	reply(t, response{ID: req.ID, Result: result})
+}
+
+func reply(t Transport, resp response) {
+	data, err := json.Marshal(resp)
+	if err != nil {
+		data, _ = json.Marshal(response{ID: resp.ID, Error: "could not encode the reply: " + err.Error()})
+	}
+	t.Send(MsgResponse, string(data))
+}
+
+func (h *Handler) call(ctx context.Context, t Transport, req request) (any, error) {
+	params := func(v any) error {
+		if len(req.Params) == 0 {
+			return nil
+		}
+		if err := json.Unmarshal(req.Params, v); err != nil {
+			return fmt.Errorf("could not read the parameters of %q: %w", req.Method, err)
+		}
+		return nil
+	}
+
+	switch req.Method {
+	case "device":
+		d := h.Service.device
+		return deviceInfo{Model: string(d.Type), Name: d.Type.DisplayName(), Firmware: h.Service.firmware(), Tested: d.Tested()}, nil
+	case "refresh":
+		return struct{}{}, h.Service.Refresh()
+	case "list":
+		var p ListRequest
+		if err := params(&p); err != nil {
+			return nil, err
+		}
+		return h.Service.List(p)
+	case "detail":
+		var p struct {
+			Name string `json:"name"`
+		}
+		if err := params(&p); err != nil {
+			return nil, err
+		}
+		return h.Service.Detail(p.Name)
+	case "plan":
+		var p namesParams
+		if err := params(&p); err != nil {
+			return nil, err
+		}
+		return h.Service.Plan(p.Names)
+	case "install":
+		var p namesParams
+		if err := params(&p); err != nil {
+			return nil, err
+		}
+		if err := h.Jobs.StartInstall(p.Names); err != nil {
+			return nil, err
+		}
+		h.follow(ctx, t, 0)
+		return struct{}{}, nil
+	case "job":
+		return h.Jobs.Status()
+	default:
+		return nil, fmt.Errorf("unknown method %q", req.Method)
+	}
+}
+
+// follow forwards the install's events to the frontend in the background. One follower at a time, so an event is never sent twice.
+func (h *Handler) follow(ctx context.Context, t Transport, after int) {
+	h.followMu.Lock()
+	if h.following {
+		h.followMu.Unlock()
+		return
+	}
+	h.following = true
+	h.followMu.Unlock()
+
+	go func() {
+		defer func() {
+			h.followMu.Lock()
+			h.following = false
+			h.followMu.Unlock()
+		}()
+		err := h.Jobs.Follow(ctx, after, func(e Event) {
+			if data, err := json.Marshal(e); err == nil {
+				t.Send(MsgInstallEvent, string(data))
+			}
+		})
+		if err != nil && ctx.Err() == nil {
+			data, _ := json.Marshal(Event{Kind: EventDone, Result: &InstallResult{Errors: []string{err.Error()}}})
+			t.Send(MsgInstallEvent, string(data))
+		}
+	}()
+}

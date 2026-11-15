@@ -88,9 +88,14 @@ installs into `/home/root/xovi/exthome/appload/retaskable/`.
   `linux/arm64` with `CGO_ENABLED=0` and do not pull in Wails. Checked with
   `go build`.
 - The root package (`packagesservice.go`, `connectionservice.go` and the
-  rest) is the Wails app. It cannot be imported. Logic the on-device app
-  needs from it has to be moved into `internal/` first. I have not yet read
-  `packagesservice.go` closely enough to say how much that is.
+  rest) is the Wails app. It cannot be imported. For milestone 1 nothing had
+  to move out of it: the catalogue, the solver calls and the installer are
+  already in `internal/vellum` and `internal/installer`, and the root package
+  only wires them to Wails. The on-device service does its own, smaller
+  wiring.
+- One shared-code fix was needed: `vellum.Client.GetOSVersionState` treated a
+  missing stored-version file as a failure unless the error was an SSH exit
+  error. It now accepts a local exit error too.
 - Device detection in `remarkable-go` already takes `filesystem.FS` and
   `executor.Executor` interfaces, so local implementations should be enough.
 - The package catalogue is fetched over HTTPS from
@@ -251,13 +256,36 @@ ondevice/manifest.json          AppLoad manifest
 - Delivery: copy to `/home/root/xovi/exthome/appload/remanager/` during
   development; a Vellum package that depends on `appload` later.
 
+### Backend as built
+
+- `internal/ondevice.Service` lists the catalogue in pages of at most 25,
+  shows one package, plans an install with Vellum's simulate, and installs.
+- Post-install steps that packages ask for (today: rebuilding the hashtable)
+  are not run. They stop the stock UI, so they wait until that path is
+  designed. The install result names each step it skipped.
+- The frontend's install runs in a worker: the same binary, started by
+  `systemd-run` as the unit `remanager-ondevice-install`. It holds a lock
+  for the whole install and appends each step to
+  `/home/root/.local/state/remanager-ondevice/install.jsonl`. A backend that
+  starts later replays that file to the frontend.
+- Frontend and backend exchange JSON: type 1 is a request (`device`,
+  `refresh`, `list`, `detail`, `plan`, `install`, `job`), type 2 its reply,
+  type 3 an install event.
+- The binary also runs from a shell (`list`, `installed`, `info`, `plan`,
+  `install`, `job`), so the backend can be tried over SSH before the UI
+  exists. `list`, `installed`, `info`, `plan` and `job` change nothing on
+  the tablet.
+- It refuses to run on a model other than the Move unless given
+  `--allow-untested`.
+
 ## 8. Milestone 1 and open questions
 
 Milestone 1, in order:
 
 1. `LocalExecutor` with tests. Done.
 2. Go AppLoad client with tests against a local socket. Done.
-3. Backend: list catalogue, list installed, simulate, install.
+3. Backend: list catalogue, list installed, simulate, install. Done, tested
+   against a fake tablet; not yet run on the Move.
 4. QML: package list, package detail, confirm, progress.
 5. First run on the Move, after the rehearsal in section 5.
 
@@ -265,7 +293,6 @@ Open questions:
 
 - Which AppLoad version is installed? (`vellum info appload`)
 - Is `systemd-run` available on the Move?
-- How much of `packagesservice.go` has to move into `internal/`?
 - What does official software recovery do to documents on the Move?
 
 ## 9. Sources
