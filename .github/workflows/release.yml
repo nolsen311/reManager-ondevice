@@ -84,6 +84,10 @@ jobs:
             -o "$work/remanager-ondevice-$PKGVER.tar.gz" HEAD
           sed -e 's|^source=.*|source="$pkgname-$pkgver.tar.gz"|' -e '/^sha512sums=/,$d' \
             "$PKG_DIR/VELBUILD" > "$work/VELBUILD"
+          # vbuild checks that the README address exists. A manual run has no tag yet, so it points at the commit being built.
+          if [ "$GITHUB_REF_TYPE" != tag ]; then
+            sed -i "s|^readmeurl=.*|readmeurl=\"https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/ondevice/README.md\"|" "$work/VELBUILD"
+          fi
           (cd "$work" && printf "sha512sums='%s\n%s'\n" \
             "$(sha512sum "remanager-ondevice-$PKGVER.tar.gz" | cut -d' ' -f1)" \
             "remanager-ondevice-$PKGVER.tar.gz") >> "$work/VELBUILD"
